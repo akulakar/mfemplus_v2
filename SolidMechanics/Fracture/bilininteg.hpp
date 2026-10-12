@@ -100,7 +100,7 @@ namespace mfemplus
 
     /** Integrator for variational fracture, elastic energy and damage term, using Young's modulus E and Poisson's ratio nu with a volumetric eigenstrain
        $$
-         a(d, \phi) =  W(u, \nabla u) d \phi
+         a(d, \phi) =  2W(u, \nabla u) d \phi
        $$
        This is a scalar integrator, i.e. defined for scalar FE spaces. **/
     class IsotropicStrainEnergyVolumetricEigenStrainDamageIntegrator : public BilinearFormIntegrator

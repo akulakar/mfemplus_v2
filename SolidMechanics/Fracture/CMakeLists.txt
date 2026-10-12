@@ -7,7 +7,7 @@ if(NOT TARGET mfem)
   find_package(MPI REQUIRED)
 endif()
 
-# # Path to Eigen
+# Path to Eigen
 set(EIGEN_inc "/opt/homebrew/opt/eigen/include/eigen3/Eigen")
 
 add_library(fracture

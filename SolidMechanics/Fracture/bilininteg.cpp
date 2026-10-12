@@ -54,7 +54,7 @@ namespace mfemplus
         const IntegrationRule *ir = GetIntegrationRule(el, Trans);
         if (ir == NULL)
         {
-            int order = 2 * Trans.OrderGrad(&el); // correct order?
+            int order = 2 * el.GetOrder() + Trans.OrderGrad(&el);
             ir = &IntRules.Get(el.GetGeomType(), order);
         }
 
@@ -189,7 +189,7 @@ namespace mfemplus
         const IntegrationRule *ir = GetIntegrationRule(el, Trans);
         if (ir == NULL)
         {
-            int order = 2 * Trans.OrderGrad(&el); // correct order?
+            int order = 2 * el.GetOrder() + Trans.OrderGrad(&el);
             ir = &IntRules.Get(el.GetGeomType(), order);
         }
 
@@ -292,7 +292,7 @@ namespace mfemplus
         const IntegrationRule *ir = GetIntegrationRule(el, Trans);
         if (ir == NULL)
         {
-            int order = 2 * Trans.OrderGrad(&el); // correct order?
+            int order = 2 * el.GetOrder() + Trans.OrderGrad(&el);
             ir = &IntRules.Get(el.GetGeomType(), order);
         }
 
@@ -493,7 +493,7 @@ namespace mfemplus
         const IntegrationRule *ir = GetIntegrationRule(el, Trans);
         if (ir == NULL)
         {
-            int order = 2 * Trans.OrderGrad(&el); // correct order?
+            int order = 2 * el.GetOrder() + Trans.OrderGrad(&el);
             ir = &IntRules.Get(el.GetGeomType(), order);
         }
 
@@ -631,7 +631,7 @@ namespace mfemplus
         const IntegrationRule *ir = GetIntegrationRule(el, Trans);
         if (ir == NULL)
         {
-            int order = 2 * Trans.OrderGrad(&el); // correct order?
+            int order = 2 * el.GetOrder() + Trans.OrderGrad(&el);
             ir = &IntRules.Get(el.GetGeomType(), order);
         }
 
@@ -727,8 +727,7 @@ namespace mfemplus
                     // Plane stress
                     volumetric_stress *= (2.0 - (1.0 / (1.0 - NU)));
                     // need to check this.
-
-                    quadratic_volumetric_strain_energy = (3.0 / 2.0) * vol_strain_coeff * vol_strain_coeff * (pow(1.0 - 2.0 * NU, 2.0) / (E * (1.0 - NU)));
+                    quadratic_volumetric_strain_energy = (1.0 / 2.0) * vol_strain_coeff * InnerProduct(volumetric_stress, identity) * (pow(1.0 - 2.0 * NU, 2.0) / (E * (1.0 - NU)));
                     break;
                 }
                 break;
@@ -758,7 +757,7 @@ namespace mfemplus
                 // volumetric stress. Let stiffness C act on identity and multiply by strain coeff.
                 C.Mult(identity, volumetric_stress);
                 volumetric_stress *= vol_strain_coeff;
-                quadratic_volumetric_strain_energy = (3.0 / 2.0) * vol_strain_coeff * vol_strain_coeff;
+                quadratic_volumetric_strain_energy = (1.0 / 2.0) * vol_strain_coeff * InnerProduct(volumetric_stress, identity);
 
                 break;
             }
@@ -771,7 +770,7 @@ namespace mfemplus
 
             B.Mult(eldofdisp, Bu);                                                                                    // Bu has dimension strain_comps. This is the strain vector.
             strain_energy = InnerProduct(CBu, Bu);                                                                    // This is twice the strain energy
-            volumetric_strain_energy = InnerProduct(volumetric_stress, Bu);                                           // This is the linear pressure energy
+            volumetric_strain_energy = InnerProduct(volumetric_stress, Bu);                                           // This is the linear volumetric strain energy
             total_energy = strain_energy - 2.0 * volumetric_strain_energy + 2.0 * quadratic_volumetric_strain_energy; // This is twice the total energy
 
             // // Gershgorin circle theorem for stress. Alternatively, use history variable for strain energy.

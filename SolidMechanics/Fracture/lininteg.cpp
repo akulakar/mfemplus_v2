@@ -251,7 +251,8 @@ namespace mfemplus
 
         if (ir == NULL)
         {
-            ir = &IntRules.Get(el.GetGeomType(), 2 * el.GetOrder());
+            int order = 2 * el.GetOrder() + Tr.OrderGrad(&el);
+            ir = &IntRules.Get(el.GetGeomType(), order);
         }
         double w, NU, E;
 
@@ -365,7 +366,7 @@ namespace mfemplus
                 // volumetric stress. Let stiffness C act on identity and multiply by strain coeff.
                 C.Mult(identity, volumetric_stress);
                 volumetric_stress *= vol_strain_coeff;
-                quadratic_volumetric_strain_energy = (3.0 / 2.0) * vol_strain_coeff * vol_strain_coeff;
+                quadratic_volumetric_strain_energy = (1.0 / 2.0) * vol_strain_coeff * InnerProduct(volumetric_stress, identity);
 
                 break;
             }
@@ -721,7 +722,8 @@ namespace mfemplus
             const IntegrationRule *ir = GetIntegrationRule(el, Tr);
             if (ir == NULL)
             {
-                ir = &IntRules.Get(el.GetGeomType(), 2 * el.GetOrder());
+                int order = 2 * el.GetOrder() + Tr.OrderGrad(&el);
+                ir = &IntRules.Get(el.GetGeomType(), order);
             }
             double w, NU, E;
 
