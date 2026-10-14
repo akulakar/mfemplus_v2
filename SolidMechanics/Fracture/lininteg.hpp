@@ -41,13 +41,9 @@ namespace mfemplus
         FractureDamageLFIntegrator(Coefficient &e, Coefficient &nu, GridFunction &disp, FiniteElementSpace *disp_fespace, int plane_approximation = 0, Coefficient *vol_pressure = nullptr)
             : young_mod(&e), poisson_ratio(&nu), disp_gf(&disp), disp_fes(disp_fespace), planeApprox(plane_approximation), volumetric_pressure(vol_pressure) {};
 
-        void AssembleDevice(const FiniteElementSpace &fes, const Array<int> &markers, Vector &b) override {};
-
         /** Given a particular Finite Element and a transformation (Tr)
             computes the element right hand side element vector, elvect. **/
         void AssembleRHSElementVect(const FiniteElement &el, ElementTransformation &Tr, Vector &elvect) override;
-
-        virtual void AssembleRHSElementVect(const FiniteElement &el, FaceElementTransformations &Tr, Vector &elvect) override {};
 
         using LinearFormIntegrator::AssembleRHSElementVect;
     };
@@ -164,15 +160,11 @@ namespace mfemplus
         DamagedIsotropicVolumetricEigenstrainBodyForceLFIntegrator(Coefficient &e, Coefficient &nu, Coefficient &volumetric_strain_coeff_in, real_t k_eps, GridFunction &damage_gridfunc, FiniteElementSpace *damage_fespace, int plane_approximation = 0)
             : volumetric_strain_coeff(&volumetric_strain_coeff_in), young_mod(&e), poisson_ratio(&nu), k_epsilon(k_eps), damage_gf(&damage_gridfunc), damage_fes(damage_fespace), planeApprox(plane_approximation) {};
 
-        // void AssembleDevice(const FiniteElementSpace &fes, const Array<int> &markers, Vector &b) override {};
-
         /** Given a particular Finite Element and a transformation (Tr)
             computes the element right hand side element vector, elvect. **/
         void AssembleRHSElementVect(const FiniteElement &el, ElementTransformation &Tr, Vector &elvect) override;
 
-        // virtual void AssembleRHSElementVect(const FiniteElement &el, FaceElementTransformations &Tr, Vector &elvect) override {};
-
-        // using LinearFormIntegrator::AssembleRHSElementVect;
+        using LinearFormIntegrator::AssembleRHSElementVect;
     };
 
     //------------------------------------------------------------------------------------------------------------

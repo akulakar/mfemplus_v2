@@ -654,7 +654,7 @@ namespace mfemplus
 
         volumetric_stress = 0.0;
 
-        // double lambda1(0.0), lambda2(0.0), lambda3(0.0);
+        double lambda1(0.0), lambda2(0.0), lambda3(0.0);
         double vol_strain_coeff(0.0);
         double strain_energy(0.0), volumetric_strain_energy(0.0), quadratic_volumetric_strain_energy(0.0), total_energy(0.0);
 
@@ -768,39 +768,41 @@ namespace mfemplus
             CB.Mult(eldofdisp, CBu); // CBu has dimension strain_comps. This is the stress vector.
             // For tensile loading, no need for Gershgorin check.
 
-            B.Mult(eldofdisp, Bu);                                                                                    // Bu has dimension strain_comps. This is the strain vector.
-            strain_energy = InnerProduct(CBu, Bu);                                                                    // This is twice the strain energy
-            volumetric_strain_energy = InnerProduct(volumetric_stress, Bu);                                           // This is the linear volumetric strain energy
-            total_energy = strain_energy - 2.0 * volumetric_strain_energy + 2.0 * quadratic_volumetric_strain_energy; // This is twice the total energy
+            // B.Mult(eldofdisp, Bu); // Bu has dimension strain_comps. This is the strain vector.
+            // strain_energy = InnerProduct(CBu, Bu);                                                                    // This is twice the strain energy
+            // volumetric_strain_energy = InnerProduct(volumetric_stress, Bu);                                           // This is the linear volumetric strain energy
+            // total_energy = strain_energy - 2.0 * volumetric_strain_energy + 2.0 * quadratic_volumetric_strain_energy; // This is twice the total energy
 
-            // // Gershgorin circle theorem for stress. Alternatively, use history variable for strain energy.
-            // if (dim == 2)
-            // {
-            //     // In 2D lambda min is lambda1.
-            //     lambda1 = (CBu(0) - pressure_coeff + CBu(1) - pressure_coeff) / 2.0 - std::sqrt(pow((CBu(0) - CBu(1)) / 2.0, 2.0) + pow(CBu(2), 2.0));
-            //     lambda2 = (CBu(0) - pressure_coeff + CBu(1) - pressure_coeff) / 2.0 + std::sqrt(pow((CBu(0) - CBu(1)) / 2.0, 2.0) + pow(CBu(2), 2.0));
-            //     lambda3 = lambda1 + 1.0;
+            // Gershgorin circle theorem for stress. Alternatively, use history variable for strain energy.
+            if (dim == 2)
+            {
+                // In 2D lambda min is lambda1.
+                lambda1 = (CBu(0) - volumetric_stress(0) + CBu(1) - volumetric_stress(1)) / 2.0 - std::sqrt(pow((CBu(0) - CBu(1)) / 2.0, 2.0) + pow(CBu(2), 2.0));
+                lambda2 = (CBu(0) - volumetric_stress(0) + CBu(1) - volumetric_stress(1)) / 2.0 + std::sqrt(pow((CBu(0) - CBu(1)) / 2.0, 2.0) + pow(CBu(2), 2.0));
+                lambda3 = lambda1 + 1.0;
 
-            //     // lambda1 = CBu(0) - std::abs(CBu(3));
-            //     // lambda2 = CBu(1) - std::abs(CBu(3));
-            //     // lambda3 = lambda1 + lambda2; // artificially making it greater than both.
-            // }
-            // else if (dim == 3)
-            // {
-            //     lambda1 = CBu(0) - pressure_coeff - std::abs(CBu(5)) - std::abs(CBu(4)); // \lambda_{1} = \sigma_{11} - |\sigma_{12}| - |\sigma_{13}|
-            //     lambda2 = CBu(1) - pressure_coeff - std::abs(CBu(5)) - std::abs(CBu(3)); // \lambda_{2} = \sigma_{22} - |\sigma_{12}| - |\sigma_{23}|
-            //     lambda3 = CBu(2) - pressure_coeff - std::abs(CBu(4)) - std::abs(CBu(3)); // \lambda_{3} = \sigma_{33} - |\sigma_{13}| - |\sigma_{23}|
-            // }
+                // lambda1 = CBu(0) - std::abs(CBu(3));
+                // lambda2 = CBu(1) - std::abs(CBu(3));
+                // lambda3 = lambda1 + lambda2; // artificially making it greater than both.
+            }
+            else if (dim == 3)
+            {
+                lambda1 = CBu(0) - volumetric_stress(0) - std::abs(CBu(5)) - std::abs(CBu(4)); // \lambda_{1} = \sigma_{11} - |\sigma_{12}| - |\sigma_{13}|
+                lambda2 = CBu(1) - volumetric_stress(1) - std::abs(CBu(5)) - std::abs(CBu(3)); // \lambda_{2} = \sigma_{22} - |\sigma_{12}| - |\sigma_{23}|
+                lambda3 = CBu(2) - volumetric_stress(2) - std::abs(CBu(4)) - std::abs(CBu(3)); // \lambda_{3} = \sigma_{33} - |\sigma_{13}| - |\sigma_{23}|
+            }
 
-            // if (std::min({lambda1, lambda2, lambda3}) < 0)
-            // {
-            //     total_energy = total_energy * (1e-20);
-            // }
-            // else
-            // {
-            //     B.Mult(eldofdisp, Bu); // Bu has dimension strain_comps. This is the strain vector.
-            //     strain_energy = InnerProduct(CBu, Bu);
-            // }
+            if (std::min({lambda1, lambda2, lambda3}) < 0)
+            {
+                total_energy = total_energy * (1e-20); // Set total energy to 0
+            }
+            else
+            {
+                B.Mult(eldofdisp, Bu);                                                                                    // Bu has dimension strain_comps. This is the strain vector.
+                strain_energy = InnerProduct(CBu, Bu);                                                                    // This is twice the strain energy
+                volumetric_strain_energy = InnerProduct(volumetric_stress, Bu);                                           // This is the linear volumetric strain energy
+                total_energy = strain_energy - 2.0 * volumetric_strain_energy + 2.0 * quadratic_volumetric_strain_energy; // This is twice the total energy
+            }
 
             AddMult_a_VVt(w * total_energy, shape, elmat); // multiplied by twice the strain energy - twice the pressure energy.
         }
