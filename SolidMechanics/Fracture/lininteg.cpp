@@ -1,13 +1,11 @@
 //------------------------------------------------------------------------------------------------------------
 //------------------------------------------------------------------------------------------------------------
-// Linear form intergrators for fracture
+// Linear form integrators for fracture
 //------------------------------------------------------------------------------------------------------------
 //------------------------------------------------------------------------------------------------------------
 
 #include "lininteg.hpp"
-#include <cmath>
-#include <Dense>
-#include <SVD>
+#include "fracture_utils.hpp"
 
 using namespace std;
 using namespace mfem;
@@ -17,822 +15,372 @@ namespace mfemplus
     // -------------------------------------------------------------------------------------------------------------------------
     // -------------------------------------------------------------------------------------------------------------------------
     // Linear form integrators for regularized variational fracture.
+    //
+    // Damage equation right hand sides (scalar damage space) integrate twice the energy density against the shape
+    // functions. Body force right hand sides (vector displacement space) integrate B^T (stress) scaled by the degradation.
+    // Isotropic integrators evaluate E and nu at the first integration point only (constant per element).
     // -------------------------------------------------------------------------------------------------------------------------
     // -------------------------------------------------------------------------------------------------------------------------
 
-    void FractureDamageLFIntegrator::AssembleRHSElementVect(const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
+    // Element vector of the damage equation: sum over quadrature points of w * 2W * phi_i, with
+    // 2W = u^T B^T C B u twice the strain energy density of the frozen displacement.
+    void IsotropicStrainEnergyDamageLFIntegrator::AssembleRHSElementVect(const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
     {
-        int dof = el.GetDof();
-        int dim = el.GetDim();
-        int str_comp = (dim == 2) ? 3 : 6;
-        int elnum = Tr.ElementNo;
+        const int dof = el.GetDof();
+        const int dim = el.GetDim();
+        const int str_comp = detail::NumStrainComponents(dim);
 
-        shape.SetSize(dof); // vector of size dof
+        shape.SetSize(dof);
         dshape.SetSize(dof, dim);
         gshape.SetSize(dof, dim);
-        eldofs.SetSize(dof * dim);    // vector valued for displacement
-        eldofdisp.SetSize(dof * dim); // vector valued displacement
-        eldofdamage.SetSize(dof);     // scalar valued damage
-
-        disp_fes->GetElementVDofs(elnum, eldofs);
-
-        for (int i = 0; i < eldofdisp.Size(); i++)
-        {
-            eldofdisp(i) = (*disp_gf)(eldofs[i]);
-        }
-        // Great, now we have all components of displacements at each dof.
-        // Next, construct the stiffness matrix C, compute displacement gradients, and take inner product.
-
-        const IntegrationRule *ir = GetIntegrationRule(el, Tr);
-
-        if (ir == NULL)
-        {
-            ir = &IntRules.Get(el.GetGeomType(), 2 * el.GetOrder());
-        }
-        double w, NU, E;
-
-        C.SetSize(str_comp, str_comp);   // Stiffness in Voigt form
-        B.SetSize(str_comp, dof * dim);  // Strain displacement matrix
-        CB.SetSize(str_comp, dof * dim); // Stiffness times strain displacement
-        CBu.SetSize(str_comp);
-        Bu.SetSize(str_comp);
-
-        body_pressure.SetSize(str_comp);
         elvect.SetSize(dof);
-
-        C = 0.0;
-        B = 0.0;
-        body_pressure = 0.0;
         elvect = 0.0;
 
-        double lambda1, lambda2, lambda3;
-        double strain_energy(0.0), pressure_energy(0.0), quadratic_pressure_energy(0.0), total_energy(0.0);
-        double pressure_coeff(0.0);
+        detail::GatherElementValues(*disp_gf, *disp_fes, Tr.ElementNo, eldofs, eldofdisp);
 
-        for (int i = 0; i < ir->GetNPoints(); i++)
+        const IntegrationRule &ir = detail::IntRuleOrDefault(GetIntegrationRule(el, Tr), el, Tr);
+
+        C.SetSize(str_comp, str_comp);
+        B.SetSize(str_comp, dof * dim);
+        CBu.SetSize(str_comp);
+        Bu.SetSize(str_comp);
+        C = 0.0;
+        B = 0.0;
+
+        for (int i = 0; i < ir.GetNPoints(); i++)
         {
-            const IntegrationPoint &ip = ir->IntPoint(i);
+            const IntegrationPoint &ip = ir.IntPoint(i);
 
             el.CalcDShape(ip, dshape);
             Tr.SetIntPoint(&ip);
             el.CalcPhysShape(Tr, shape);
-            w = ip.weight * Tr.Weight(); // Quadrature weights
+
+            const real_t w = ip.weight * Tr.Weight();
+            Mult(dshape, Tr.InverseJacobian(), gshape);
+
+            if (i == 0)
+            {
+                detail::FillIsotropicStiffness(young_mod->Eval(Tr, ip), poisson_ratio->Eval(Tr, ip), dim, planeApprox, C);
+            }
+            detail::FillStrainDisplacement(gshape, dim, B);
+
+            // Twice the strain energy, C_{ijkl} u_{k,l} u_{i,j}.
+            const real_t strain_energy = detail::TwiceStrainEnergy(C, B, eldofdisp, Bu, CBu);
+
+            add(elvect, w * strain_energy, shape, elvect);
+        }
+    }
+
+    // Same as IsotropicStrainEnergyDamageLFIntegrator, but 2W includes the volumetric pressure:
+    // 2W = strain energy - 2 (pressure . strain) + 2 (quadratic pressure energy), see detail::SetPressureTerms.
+    void IsotropicStrainEnergyPressureDamageLFIntegrator::AssembleRHSElementVect(const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
+    {
+        const int dof = el.GetDof();
+        const int dim = el.GetDim();
+        const int str_comp = detail::NumStrainComponents(dim);
+
+        shape.SetSize(dof);
+        dshape.SetSize(dof, dim);
+        gshape.SetSize(dof, dim);
+        elvect.SetSize(dof);
+        elvect = 0.0;
+
+        detail::GatherElementValues(*disp_gf, *disp_fes, Tr.ElementNo, eldofs, eldofdisp);
+
+        const IntegrationRule &ir = detail::IntRuleOrDefault(GetIntegrationRule(el, Tr), el, Tr);
+
+        C.SetSize(str_comp, str_comp);
+        B.SetSize(str_comp, dof * dim);
+        CBu.SetSize(str_comp);
+        Bu.SetSize(str_comp);
+        body_pressure.SetSize(str_comp);
+        C = 0.0;
+        B = 0.0;
+        body_pressure = 0.0;
+
+        real_t E(0.0), NU(0.0), quadratic_pressure_energy(0.0);
+
+        for (int i = 0; i < ir.GetNPoints(); i++)
+        {
+            const IntegrationPoint &ip = ir.IntPoint(i);
+
+            el.CalcDShape(ip, dshape);
+            Tr.SetIntPoint(&ip);
+            el.CalcPhysShape(Tr, shape);
+
+            const real_t w = ip.weight * Tr.Weight();
+            Mult(dshape, Tr.InverseJacobian(), gshape);
 
             if (i == 0)
             {
                 NU = poisson_ratio->Eval(Tr, ip);
-                E = young_mod->Eval(Tr, ip); // The elastic constants are evaluated at the first integration point.
-            } // Constant throughout element
-
-            Mult(dshape, Tr.InverseJacobian(), gshape); // Recovering the gradients of the shape functions in the physical space.
-
-            // Here we want to use Voigt notation to speed up the assembly process.
-            // For this, we need the strain displacement matrix B. The element stiffness can be computed as
-            // \int_{\Omega} B^T C B. In Voigt form, the stiffness matrix has dimensions 3 x 3 in 2D and 6 x 6 in 3D.
-            // The B matrix as 3 rows in 2D and 6 rowd in 3D.
-
-            switch (dim)
-            {
-            case 2:
-                // volumetric pressure
-                if (volumetric_pressure != nullptr)
-                {
-                    pressure_coeff = volumetric_pressure->Eval(Tr, ip);
-
-                    switch (planeApprox)
-                    {
-                    case 1:
-                        // Plane stress
-                        body_pressure(0) = pressure_coeff * (2.0 - (1.0 / (1.0 - NU)));
-                        body_pressure(1) = pressure_coeff * (2.0 - (1.0 / (1.0 - NU)));
-
-                        quadratic_pressure_energy = (pressure_coeff * pressure_coeff * pow(1.0 - 2.0 * NU, 2.0)) / (E * (1.0 - NU));
-                        break;
-                    }
-                }
-
-                if (i == 0)
-                {
-                    switch (planeApprox)
-                    {
-                    case 0:
-                        // Plane strain
-                        C(0, 0) = C(1, 1) = E * (1.0 - NU) / ((1.0 + NU) * (1.0 - 2.0 * NU));
-                        C(0, 1) = C(1, 0) = E * NU / ((1.0 + NU) * (1.0 - 2.0 * NU));
-                        C(2, 2) = E / (2.0 * (1.0 + NU));
-                        break;
-
-                    case 1:
-                        // Plane stress
-                        C(0, 0) = C(1, 1) = (E / (1.0 - pow(NU, 2.0)));
-                        C(0, 1) = C(1, 0) = (E * NU / (1.0 - pow(NU, 2.0)));
-                        C(2, 2) = E / (2.0 * (1.0 + NU));
-                        break;
-                    }
-                }
-
-                // In 2D, we have 3 unique strain components.
-                for (int spf = 0; spf < dof; spf++)
-                {
-                    B(0, spf) = gshape(spf, 0);
-                    B(1, spf + dof) = gshape(spf, 1);
-                    B(2, spf) = gshape(spf, 1);
-                    B(2, spf + dof) = gshape(spf, 0);
-                }
-                break;
-
-            case 3:
-                if (volumetric_pressure != nullptr)
-                {
-                    pressure_coeff = volumetric_pressure->Eval(Tr, ip);
-                    body_pressure(0) = pressure_coeff;
-                    body_pressure(1) = pressure_coeff;
-                    body_pressure(2) = pressure_coeff;
-
-                    quadratic_pressure_energy = (3.0 * pressure_coeff * pressure_coeff) / ((2.0 * E) / (1.0 - 2.0 * NU));
-                }
-
-                if (i == 0)
-                {
-                    C(0, 0) = C(1, 1) = C(2, 2) = (E * (1 - NU)) / ((1 - 2 * NU) * (1 + NU));
-                    C(0, 1) = C(0, 2) = C(1, 0) = C(1, 2) = C(2, 0) = C(2, 1) = (E * NU) / ((1 - 2 * NU) * (1 + NU));
-                    C(3, 3) = C(4, 4) = C(5, 5) = E / (2 * (1 + NU));
-                }
-
-                // In 3D, we have 6 unique strain components.
-                for (int spf = 0; spf < dof; spf++)
-                {
-                    B(0, spf) = gshape(spf, 0);
-                    B(1, spf + dof) = gshape(spf, 1);
-                    B(2, spf + 2 * dof) = gshape(spf, 2);
-                    B(3, spf + dof) = gshape(spf, 2);
-                    B(3, spf + 2 * dof) = gshape(spf, 1);
-                    B(4, spf) = gshape(spf, 2);
-                    B(4, spf + 2 * dof) = gshape(spf, 0);
-                    B(5, spf) = gshape(spf, 1);
-                    B(5, spf + dof) = gshape(spf, 0);
-                }
-                break;
+                E = young_mod->Eval(Tr, ip);
+                detail::FillIsotropicStiffness(E, NU, dim, planeApprox, C);
             }
+            detail::FillStrainDisplacement(gshape, dim, B);
 
-            // Now compute the quantity C_{ijkl} u_{k,l} u_{i,j}. Using Voigt notation, of course...
-            // This is equivalent to.
-            Mult(C, B, CB);          // CB is 6 x (dof * dim)
-            CB.Mult(eldofdisp, CBu); // CBu has dimension strain_comps. This is the stress vector.
-            // For tensile loading, no need for Gershgorin check.
-            B.Mult(eldofdisp, Bu);                             // Bu has dimension strain_comps. This is the strain vector.
-            strain_energy = InnerProduct(CBu, Bu);             // This is twice the strain energy
-                                                               // if (volumetric_pressure != nullptr)
-                                                               // {
-            pressure_energy = InnerProduct(body_pressure, Bu); // This is the linear pressure energy.
-            // }
-            total_energy = strain_energy - 2.0 * pressure_energy + 2.0 * quadratic_pressure_energy; // This is twice the total energy.
+            // Volumetric pressure, evaluated at each integration point.
+            detail::SetPressureTerms(dim, planeApprox, volumetric_pressure->Eval(Tr, ip), E, NU, body_pressure, quadratic_pressure_energy);
 
-            // Gershgorin circle theorem for stress. Alternatively, use history variable for strain energy.
-            // if (dim == 2)
-            // {
-            //     // In 2D lambda min is lambda1.
-            //     lambda1 = (CBu(0) - pressure_coeff + CBu(1) - pressure_coeff) / 2.0 - std::sqrt(pow((CBu(0) - CBu(1)) / 2.0, 2.0) + pow(CBu(2), 2.0));
-            //     lambda2 = (CBu(0) - pressure_coeff + CBu(1) - pressure_coeff) / 2.0 + std::sqrt(pow((CBu(0) - CBu(1)) / 2.0, 2.0) + pow(CBu(2), 2.0));
-            //     lambda3 = lambda1 + 1.0;
+            // Twice the total energy: C_{ijkl} u_{k,l} u_{i,j} - 2 p : strain + 2 (quadratic pressure energy).
+            const real_t strain_energy = detail::TwiceStrainEnergy(C, B, eldofdisp, Bu, CBu);
+            const real_t pressure_energy = InnerProduct(body_pressure, Bu);
+            const real_t total_energy = strain_energy - 2.0 * pressure_energy + 2.0 * quadratic_pressure_energy;
 
-            //     // lambda1 = CBu(0) - std::abs(CBu(3));
-            //     // lambda2 = CBu(1) - std::abs(CBu(3));
-            //     // lambda3 = lambda1 + lambda2; // artificially making it greater than both.
-            // }
-            // else if (dim == 3)
-            // {
-            //     lambda1 = CBu(0) - pressure_coeff - std::abs(CBu(5)) - std::abs(CBu(4)); // \lambda_{1} = \sigma_{11} - |\sigma_{12}| - |\sigma_{13}|
-            //     lambda2 = CBu(1) - pressure_coeff - std::abs(CBu(5)) - std::abs(CBu(3)); // \lambda_{2} = \sigma_{22} - |\sigma_{12}| - |\sigma_{23}|
-            //     lambda3 = CBu(2) - pressure_coeff - std::abs(CBu(4)) - std::abs(CBu(3)); // \lambda_{3} = \sigma_{33} - |\sigma_{13}| - |\sigma_{23}|
-            // }
-
-            // if (std::min({lambda1, lambda2, lambda3}) < 0)
-            // {
-            //     total_energy = 0.0;
-            // }
-            // else
-            // {
-            //     B.Mult(eldofdisp, Bu); // Bu has dimension strain_comps. This is the strain vector.
-            //     strain_energy = InnerProduct(CBu, Bu);
-            // }
-
-            // for now okay, but probably will change it to element average strain energy.
             add(elvect, w * total_energy, shape, elvect);
         }
-    };
+    }
 
+    // Element vector of the damage equation with a volumetric eigenstrain alpha I:
+    // sum over quadrature points of w * 2W * phi_i, with 2W = (strain - alpha I)^T C (strain - alpha I), including the
+    // same Gershgorin-type switch (energy scaled by 1e-20 where it fails) as the matching bilinear integrator.
     void IsotropicStrainEnergyVolumetricEigenStrainDamageLFIntegrator::AssembleRHSElementVect(const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
     {
-        int dof = el.GetDof();
-        int dim = el.GetDim();
-        int str_comp = (dim == 2) ? 3 : 6;
-        int elnum = Tr.ElementNo;
+        const int dof = el.GetDof();
+        const int dim = el.GetDim();
+        const int str_comp = detail::NumStrainComponents(dim);
 
-        shape.SetSize(dof); // vector of size dof
+        shape.SetSize(dof);
         dshape.SetSize(dof, dim);
         gshape.SetSize(dof, dim);
-        eldofs.SetSize(dof * dim);    // vector valued for displacement
-        eldofdisp.SetSize(dof * dim); // vector valued displacement
-        eldofdamage.SetSize(dof);     // scalar valued damage
         elvect.SetSize(dof);
         elvect = 0.0;
 
-        disp_fes->GetElementVDofs(elnum, eldofs);
+        detail::GatherElementValues(*disp_gf, *disp_fes, Tr.ElementNo, eldofs, eldofdisp);
 
-        for (int i = 0; i < eldofdisp.Size(); i++)
-        {
-            eldofdisp(i) = (*disp_gf)(eldofs[i]);
-        }
-        // Great, now we have all components of displacements at each dof.
-        // Next, construct the stiffness matrix C, compute displacement gradients, and take inner product.
+        const IntegrationRule &ir = detail::IntRuleOrDefault(GetIntegrationRule(el, Tr), el, Tr);
 
-        const IntegrationRule *ir = GetIntegrationRule(el, Tr);
-
-        if (ir == NULL)
-        {
-            int order = 2 * el.GetOrder() + Tr.OrderGrad(&el);
-            ir = &IntRules.Get(el.GetGeomType(), order);
-        }
-        double w, NU, E;
-
-        C.SetSize(str_comp, str_comp);   // Stiffness in Voigt form
-        B.SetSize(str_comp, dof * dim);  // Strain displacement matrix
-        CB.SetSize(str_comp, dof * dim); // Stiffness times strain displacement
+        C.SetSize(str_comp, str_comp);
+        B.SetSize(str_comp, dof * dim);
         CBu.SetSize(str_comp);
         Bu.SetSize(str_comp);
         identity.SetSize(str_comp);
         volumetric_stress.SetSize(str_comp);
-
         C = 0.0;
         B = 0.0;
-
-        identity = 0.0;
-        identity(0) = 1.0;
-        identity(1) = 1.0;
-        if (dim == 3)
-            identity(2) = 1.0;
-
         volumetric_stress = 0.0;
+        detail::FillVoigtIdentity(dim, identity);
 
-        double lambda1(0.0), lambda2(0.0), lambda3(0.0);
-        double vol_strain_coeff(0.0);
-        double strain_energy(0.0), volumetric_strain_energy(0.0), quadratic_volumetric_strain_energy(0.0), total_energy(0.0);
+        real_t E(0.0), NU(0.0), quadratic_volumetric_strain_energy(0.0), total_energy(0.0);
 
-        for (int i = 0; i < ir->GetNPoints(); i++)
+        for (int i = 0; i < ir.GetNPoints(); i++)
         {
-            const IntegrationPoint &ip = ir->IntPoint(i);
+            const IntegrationPoint &ip = ir.IntPoint(i);
 
             el.CalcDShape(ip, dshape);
             Tr.SetIntPoint(&ip);
             el.CalcPhysShape(Tr, shape);
-            w = ip.weight * Tr.Weight(); // Quadrature weights
 
-            vol_strain_coeff = volumetric_strain_coeff->Eval(Tr, ip);
+            const real_t w = ip.weight * Tr.Weight();
+            Mult(dshape, Tr.InverseJacobian(), gshape);
+
+            const real_t vol_strain_coeff = volumetric_strain_coeff->Eval(Tr, ip);
 
             if (i == 0)
             {
                 NU = poisson_ratio->Eval(Tr, ip);
-                E = young_mod->Eval(Tr, ip); // The elastic constants are evaluated at the first integration point.
-            } // Constant throughout element
+                E = young_mod->Eval(Tr, ip);
+                detail::FillIsotropicStiffness(E, NU, dim, planeApprox, C);
+            }
+            detail::FillStrainDisplacement(gshape, dim, B);
 
-            Mult(dshape, Tr.InverseJacobian(), gshape); // Recovering the gradients of the shape functions in the physical space.
+            // Isotropic eigenstrain alpha * I gives the volumetric stress C (alpha I).
+            detail::VolumetricStress(C, identity, vol_strain_coeff, volumetric_stress);
 
-            // Here we want to use Voigt notation to speed up the assembly process.
-            // For this, we need the strain displacement matrix B. The element stiffness can be computed as
-            // \int_{\Omega} B^T C B. In Voigt form, the stiffness matrix has dimensions 3 x 3 in 2D and 6 x 6 in 3D.
-            // The B matrix as 3 rows in 2D and 6 rowd in 3D.
-
-            switch (dim)
+            // 2D is not verified: no quadratic term, and the volumetric stress is not corrected for plane stress here.
+            if (dim == 3)
             {
-            case 2:
-                if (i == 0)
-                {
-                    switch (planeApprox)
-                    {
-                    case 0:
-                        // Plane strain
-                        C(0, 0) = C(1, 1) = E * (1.0 - NU) / ((1.0 + NU) * (1.0 - 2.0 * NU));
-                        C(0, 1) = C(1, 0) = E * NU / ((1.0 + NU) * (1.0 - 2.0 * NU));
-                        C(2, 2) = E / (2.0 * (1.0 + NU));
-                        break;
-
-                    case 1:
-                        // Plane stress
-                        C(0, 0) = C(1, 1) = (E / (1.0 - pow(NU, 2.0)));
-                        C(0, 1) = C(1, 0) = (E * NU / (1.0 - pow(NU, 2.0)));
-                        C(2, 2) = E / (2.0 * (1.0 + NU));
-                        break;
-                    }
-                }
-
-                // In 2D, we have 3 unique strain components.
-                for (int spf = 0; spf < dof; spf++)
-                {
-                    B(0, spf) = gshape(spf, 0);
-                    B(1, spf + dof) = gshape(spf, 1);
-                    B(2, spf) = gshape(spf, 1);
-                    B(2, spf + dof) = gshape(spf, 0);
-                }
-
-                // volumetric stress. Let stiffness C act on identity and multiply by strain coeff.
-                C.Mult(identity, volumetric_stress);
-                volumetric_stress *= vol_strain_coeff;
-
-                break;
-
-            case 3:
-                if (i == 0)
-                {
-                    C(0, 0) = C(1, 1) = C(2, 2) = (E * (1 - NU)) / ((1 - 2 * NU) * (1 + NU));
-                    C(0, 1) = C(0, 2) = C(1, 0) = C(1, 2) = C(2, 0) = C(2, 1) = (E * NU) / ((1 - 2 * NU) * (1 + NU));
-                    C(3, 3) = C(4, 4) = C(5, 5) = E / (2 * (1 + NU));
-                }
-
-                // In 3D, we have 6 unique strain components.
-                for (int spf = 0; spf < dof; spf++)
-                {
-                    B(0, spf) = gshape(spf, 0);
-                    B(1, spf + dof) = gshape(spf, 1);
-                    B(2, spf + 2 * dof) = gshape(spf, 2);
-                    B(3, spf + dof) = gshape(spf, 2);
-                    B(3, spf + 2 * dof) = gshape(spf, 1);
-                    B(4, spf) = gshape(spf, 2);
-                    B(4, spf + 2 * dof) = gshape(spf, 0);
-                    B(5, spf) = gshape(spf, 1);
-                    B(5, spf + dof) = gshape(spf, 0);
-                }
-
-                // volumetric stress. Let stiffness C act on identity and multiply by strain coeff.
-                C.Mult(identity, volumetric_stress);
-                volumetric_stress *= vol_strain_coeff;
-                quadratic_volumetric_strain_energy = (1.0 / 2.0) * vol_strain_coeff * InnerProduct(volumetric_stress, identity);
-
-                break;
+                // (1/2) alpha^2 I^T C I. Note volumetric_stress already contains one factor of alpha.
+                quadratic_volumetric_strain_energy = 0.5 * vol_strain_coeff * InnerProduct(volumetric_stress, identity);
             }
 
-            // Now compute the quantity C_{ijkl} u_{k,l} u_{i,j}. Using Voigt notation, of course...
-            // This is equivalent to.
-            Mult(C, B, CB);          // CB is 6 x (dof * dim)
-            CB.Mult(eldofdisp, CBu); // CBu has dimension strain_comps. This is the stress vector.
-            // For tensile loading, no need for Gershgorin check.
-            // B.Mult(eldofdisp, Bu); // Bu has dimension strain_comps. This is the strain vector.
-            // strain_energy = InnerProduct(CBu, Bu);                                                                    // This is twice the strain energy
-            // volumetric_strain_energy = InnerProduct(volumetric_stress, Bu);                                           // This is the linear pressure energy
-            // total_energy = strain_energy - 2.0 * volumetric_strain_energy + 2.0 * quadratic_volumetric_strain_energy; // This is twice the total energy
-
-            // Gershgorin circle theorem for stress. Alternatively, use history variable for strain energy.
-            if (dim == 2)
+            // Twice the energy density, (strain - alpha I)^T C (strain - alpha I), unless the Gershgorin check on the
+            // effective stress fails. In that case the energy is scaled by 1e-20 (the value kept from the previous
+            // integration point, 0 at the first one), i.e. effectively dropped.
+            const real_t strain_energy = detail::TwiceStrainEnergy(C, B, eldofdisp, Bu, CBu);
+            if (detail::EffectiveStressBoundIsNegative(dim, CBu, volumetric_stress))
             {
-                // In 2D lambda min is lambda1.
-                lambda1 = (CBu(0) - volumetric_stress(0) + CBu(1) - volumetric_stress(1)) / 2.0 - std::sqrt(pow((CBu(0) - CBu(1)) / 2.0, 2.0) + pow(CBu(2), 2.0));
-                lambda2 = (CBu(0) - volumetric_stress(0) + CBu(1) - volumetric_stress(1)) / 2.0 + std::sqrt(pow((CBu(0) - CBu(1)) / 2.0, 2.0) + pow(CBu(2), 2.0));
-                lambda3 = lambda1 + 1.0;
-
-                // lambda1 = CBu(0) - std::abs(CBu(3));
-                // lambda2 = CBu(1) - std::abs(CBu(3));
-                // lambda3 = lambda1 + lambda2; // artificially making it greater than both.
-            }
-            else if (dim == 3)
-            {
-                lambda1 = CBu(0) - volumetric_stress(0) - std::abs(CBu(5)) - std::abs(CBu(4)); // \lambda_{1} = \sigma_{11} - |\sigma_{12}| - |\sigma_{13}|
-                lambda2 = CBu(1) - volumetric_stress(1) - std::abs(CBu(5)) - std::abs(CBu(3)); // \lambda_{2} = \sigma_{22} - |\sigma_{12}| - |\sigma_{23}|
-                lambda3 = CBu(2) - volumetric_stress(2) - std::abs(CBu(4)) - std::abs(CBu(3)); // \lambda_{3} = \sigma_{33} - |\sigma_{13}| - |\sigma_{23}|
-            }
-
-            if (std::min({lambda1, lambda2, lambda3}) < 0)
-            {
-                total_energy = total_energy * (1e-20); // Set total energy to 0
+                total_energy *= 1e-20;
             }
             else
             {
-                B.Mult(eldofdisp, Bu);                                                                                    // Bu has dimension strain_comps. This is the strain vector.
-                strain_energy = InnerProduct(CBu, Bu);                                                                    // This is twice the strain energy
-                volumetric_strain_energy = InnerProduct(volumetric_stress, Bu);                                           // This is the linear volumetric strain energy
-                total_energy = strain_energy - 2.0 * volumetric_strain_energy + 2.0 * quadratic_volumetric_strain_energy; // This is twice the total energy
+                const real_t volumetric_strain_energy = InnerProduct(volumetric_stress, Bu);
+                total_energy = strain_energy - 2.0 * volumetric_strain_energy + 2.0 * quadratic_volumetric_strain_energy;
             }
 
-            // for now okay, but probably will change it to element average strain energy.
             add(elvect, w * total_energy, shape, elvect);
         }
-    };
+    }
 
+    // Element vector of the damage equation with a general stiffness: sum over quadrature points of
+    // w * (u^T B^T C B u) * phi_i, with C evaluated at each integration point.
     void AnisotropicElasticityDamageLFIntegrator::AssembleRHSElementVect(const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
     {
-        int dof = el.GetDof();
-        int dim = el.GetDim();
-        int str_comp = (dim == 2) ? 3 : 6;
-        int elnum = Tr.ElementNo;
+        const int dof = el.GetDof();
+        const int dim = el.GetDim();
+        const int str_comp = detail::NumStrainComponents(dim);
 
-        shape.SetSize(dof); // vector of size dof
+        shape.SetSize(dof);
         dshape.SetSize(dof, dim);
         gshape.SetSize(dof, dim);
-        eldofs.SetSize(dof * dim);    // vector valued for displacement
-        eldofdisp.SetSize(dof * dim); // vector valued displacement
-        eldofdamage.SetSize(dof);     // scalar valued damage
-
-        disp_fes->GetElementVDofs(elnum, eldofs);
-
-        for (int i = 0; i < eldofdisp.Size(); i++)
-        {
-            eldofdisp(i) = (*disp_gf)(eldofs[i]);
-        }
-        // Great, now we have all components of displacements at each dof.
-        // Next, construct the stiffness matrix C, compute displacement gradients, and take inner product.
-
-        const IntegrationRule *ir = GetIntegrationRule(el, Tr);
-
-        if (ir == NULL)
-        {
-            ir = &IntRules.Get(el.GetGeomType(), 2 * el.GetOrder());
-        }
-        double w;
-
-        C.SetSize(str_comp, str_comp);   // Stiffness in Voigt form
-        B.SetSize(str_comp, dof * dim);  // Strain displacement matrix
-        CB.SetSize(str_comp, dof * dim); // Stiffness times strain displacement
-        CBu.SetSize(str_comp);
-        Bu.SetSize(str_comp);
-
         elvect.SetSize(dof);
-
-        C = 0.0;
-        B = 0.0;
         elvect = 0.0;
 
-        double lambda1, lambda2, lambda3;
-        double strain_energy(0.0);
+        detail::GatherElementValues(*disp_gf, *disp_fes, Tr.ElementNo, eldofs, eldofdisp);
 
-        for (int i = 0; i < ir->GetNPoints(); i++)
+        const IntegrationRule &ir = detail::IntRuleOrDefault(GetIntegrationRule(el, Tr), el, Tr);
+
+        C.SetSize(str_comp, str_comp);
+        B.SetSize(str_comp, dof * dim);
+        CBu.SetSize(str_comp);
+        Bu.SetSize(str_comp);
+        C = 0.0;
+        B = 0.0;
+
+        for (int i = 0; i < ir.GetNPoints(); i++)
         {
-            const IntegrationPoint &ip = ir->IntPoint(i);
+            const IntegrationPoint &ip = ir.IntPoint(i);
 
             el.CalcDShape(ip, dshape);
             Tr.SetIntPoint(&ip);
             el.CalcPhysShape(Tr, shape);
-            w = ip.weight * Tr.Weight(); // Quadrature weights
 
-            stiffness->Eval(C, Tr, ip); // The stiffness matrix is evaluated at each integration point.
+            const real_t w = ip.weight * Tr.Weight();
+            Mult(dshape, Tr.InverseJacobian(), gshape);
 
-            Mult(dshape, Tr.InverseJacobian(), gshape); // Recovering the gradients of the shape functions in the physical space.
+            stiffness->Eval(C, Tr, ip); // Stiffness is evaluated at each integration point.
+            detail::FillStrainDisplacement(gshape, dim, B);
 
-            // Here we want to use Voigt notation to speed up the assembly process.
-            // For this, we need the strain displacement matrix B. The element stiffness can be computed as
-            // \int_{\Omega} B^T C B. In Voigt form, the stiffness matrix has dimensions 3 x 3 in 2D and 6 x 6 in 3D.
-            // The B matrix as 3 rows in 2D and 6 rowd in 3D.
+            // Twice the strain energy, C_{ijkl} u_{k,l} u_{i,j}.
+            const real_t strain_energy = detail::TwiceStrainEnergy(C, B, eldofdisp, Bu, CBu);
 
-            switch (dim)
-            {
-            case 2:
-                // In 2D, we have 3 unique strain components.
-                for (int spf = 0; spf < dof; spf++)
-                {
-                    B(0, spf) = gshape(spf, 0);
-                    B(1, spf + dof) = gshape(spf, 1);
-                    B(2, spf) = gshape(spf, 1);
-                    B(2, spf + dof) = gshape(spf, 0);
-                }
-                break;
-
-            case 3:
-                // In 3D, we have 6 unique strain components.
-                for (int spf = 0; spf < dof; spf++)
-                {
-                    B(0, spf) = gshape(spf, 0);
-                    B(1, spf + dof) = gshape(spf, 1);
-                    B(2, spf + 2 * dof) = gshape(spf, 2);
-                    B(3, spf + dof) = gshape(spf, 2);
-                    B(3, spf + 2 * dof) = gshape(spf, 1);
-                    B(4, spf) = gshape(spf, 2);
-                    B(4, spf + 2 * dof) = gshape(spf, 0);
-                    B(5, spf) = gshape(spf, 1);
-                    B(5, spf + dof) = gshape(spf, 0);
-                }
-                break;
-            }
-
-            // Now compute the quantity C_{ijkl} u_{k,l} u_{i,j}. Using Voigt notation, of course...
-            // This is equivalent to.
-            Mult(C, B, CB);          // CB is 6 x (dof * dim)
-            CB.Mult(eldofdisp, CBu); // CBu has dimension strain_comps. This is the stress vector.
-            // For tensile loading, no need for Gershgorin check.
-            B.Mult(eldofdisp, Bu);                 // Bu has dimension strain_comps. This is the strain vector.
-            strain_energy = InnerProduct(CBu, Bu); // This is twice the strain energy
-
-            // Gershgorin circle theorem for stress. Alternatively, use history variable for strain energy.
-            // if (dim == 2)
-            // {
-            //     // In 2D lambda min is lambda1.
-            //     lambda1 = (CBu(0) - pressure_coeff + CBu(1) - pressure_coeff) / 2.0 - std::sqrt(pow((CBu(0) - CBu(1)) / 2.0, 2.0) + pow(CBu(2), 2.0));
-            //     lambda2 = (CBu(0) - pressure_coeff + CBu(1) - pressure_coeff) / 2.0 + std::sqrt(pow((CBu(0) - CBu(1)) / 2.0, 2.0) + pow(CBu(2), 2.0));
-            //     lambda3 = lambda1 + 1.0;
-
-            //     // lambda1 = CBu(0) - std::abs(CBu(3));
-            //     // lambda2 = CBu(1) - std::abs(CBu(3));
-            //     // lambda3 = lambda1 + lambda2; // artificially making it greater than both.
-            // }
-            // else if (dim == 3)
-            // {
-            //     lambda1 = CBu(0) - pressure_coeff - std::abs(CBu(5)) - std::abs(CBu(4)); // \lambda_{1} = \sigma_{11} - |\sigma_{12}| - |\sigma_{13}|
-            //     lambda2 = CBu(1) - pressure_coeff - std::abs(CBu(5)) - std::abs(CBu(3)); // \lambda_{2} = \sigma_{22} - |\sigma_{12}| - |\sigma_{23}|
-            //     lambda3 = CBu(2) - pressure_coeff - std::abs(CBu(4)) - std::abs(CBu(3)); // \lambda_{3} = \sigma_{33} - |\sigma_{13}| - |\sigma_{23}|
-            // }
-
-            // if (std::min({lambda1, lambda2, lambda3}) < 0)
-            // {
-            //     total_energy = 0.0;
-            // }
-            // else
-            // {
-            //     B.Mult(eldofdisp, Bu); // Bu has dimension strain_comps. This is the strain vector.
-            //     strain_energy = InnerProduct(CBu, Bu);
-            // }
-
-            // for now okay, but probably will change it to element average strain energy.
             add(elvect, w * strain_energy, shape, elvect);
-        }
-    };
-
-    void PressureBodyForceDamageLFIntegrator::AssembleRHSElementVect(const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
-    {
-        {
-            int dof = el.GetDof();
-            int dim = el.GetDim();
-            int str_comp = (dim == 2) ? 3 : 6;
-            int elnum = Tr.ElementNo;
-
-            dshape.SetSize(dof, dim);
-            gshape.SetSize(dof, dim);
-            shape.SetSize(dof);
-
-            eldofs.SetSize(dof); // scalar for damage
-            eldofdamage.SetSize(dof);
-            eldofs = 0;
-            eldofdamage = 0.0;
-
-            elvect.SetSize(dof * dim);
-            B.SetSize(str_comp, dof * dim); // Strain displacement matrix
-            body_pressure.SetSize(str_comp);
-            elvec_input.SetSize(dof * dim);
-            elvect = 0.0;
-            B = 0.0;
-            body_pressure = 0.0;
-
-            damage_fes->GetElementDofs(elnum, eldofs);
-
-            for (int i = 0; i < eldofdamage.Size(); i++)
-            {
-                eldofdamage(i) = (*damage_gf)(eldofs[i]);
-            }
-
-            // Great, eldofdamage is now set. Now need to use it to construct the interpolated damage value at each quadrature point.
-            // i.e., evaluate shape functions at each quadrature point and dot product with eldofdamage to get damage at that point.
-
-            const IntegrationRule *ir = GetIntegrationRule(el, Tr);
-            if (ir == NULL)
-            {
-                ir = &IntRules.Get(el.GetGeomType(), 2 * el.GetOrder());
-            }
-            double w, NU, E;
-
-            double damage_value(0.0), degradation_constant(0.0);
-            double pressure_coeff(0.0);
-
-            for (int i = 0; i < ir->GetNPoints(); i++)
-            {
-                const IntegrationPoint &ip = ir->IntPoint(i);
-
-                el.CalcDShape(ip, dshape);
-                Tr.SetIntPoint(&ip);
-                el.CalcPhysShape(Tr, shape);
-
-                w = ip.weight * Tr.Weight(); // Quadrature weights
-
-                damage_value = InnerProduct(shape, eldofdamage);
-                degradation_constant = ((1.0 - damage_value) * (1.0 - damage_value)) + k_epsilon; // (1 - d)^{2} + k_{\epsilon}
-
-                pressure_coeff = pressure->Eval(Tr, ip);
-
-                if (i == 0)
-                {
-                    NU = poisson_ratio->Eval(Tr, ip);
-                    E = young_mod->Eval(Tr, ip); // The elastic constants are evaluated at the first integration point.
-                } // Constant throughout element
-
-                Mult(dshape, Tr.InverseJacobian(), gshape); // Recovering the gradients of the shape functions in the physical space.
-
-                // Here we want to use Voigt notation to speed up the assembly process.
-                // For this, we need the strain displacement matrix B. The element stiffness can be computed as
-                // \int_{\Omega} B^T C B. In Voigt form, the stiffness matrix has dimensions 3 x 3 in 2D and 6 x 6 in 3D.
-                // The B matrix as 3 rows in 2D and 6 rowd in 3D.
-
-                switch (dim)
-                {
-                case 2:
-                    // volumetric pressure. 2 non-zero components
-                    switch (planeApprox)
-                    {
-                    case 1:
-                        // plane stress
-                        body_pressure(0) = pressure_coeff * (2.0 - (1.0 / (1.0 - NU)));
-                        body_pressure(1) = pressure_coeff * (2.0 - (1.0 / (1.0 - NU)));
-                        break;
-                    }
-
-                    // In 2D, we have 3 unique strain components.
-                    for (int spf = 0; spf < dof; spf++)
-                    {
-                        B(0, spf) = gshape(spf, 0);
-                        B(1, spf + dof) = gshape(spf, 1);
-                        B(2, spf) = gshape(spf, 1);
-                        B(2, spf + dof) = gshape(spf, 0);
-                    }
-                    break;
-                case 3:
-
-                    // volumetric pressure. 3 non zero components
-                    body_pressure(0) = pressure_coeff;
-                    body_pressure(1) = pressure_coeff;
-                    body_pressure(2) = pressure_coeff;
-
-                    // In 3D, we have 6 unique strain components.
-                    for (int spf = 0; spf < dof; spf++)
-                    {
-                        B(0, spf) = gshape(spf, 0);
-                        B(1, spf + dof) = gshape(spf, 1);
-                        B(2, spf + 2 * dof) = gshape(spf, 2);
-                        B(3, spf + dof) = gshape(spf, 2);
-                        B(3, spf + 2 * dof) = gshape(spf, 1);
-                        B(4, spf) = gshape(spf, 2);
-                        B(4, spf + 2 * dof) = gshape(spf, 0);
-                        B(5, spf) = gshape(spf, 1);
-                        B(5, spf + dof) = gshape(spf, 0);
-                    }
-                    break;
-                }
-                B.MultTranspose(body_pressure, elvec_input);
-                add(elvect, w * degradation_constant, elvec_input, elvect);
-            }
         }
     }
 
+    // Element vector of the pressure body force in the elasticity equation: sum over quadrature points of
+    // w * ((1 - d)^2 + k_eps) * B^T p_voigt, where p_voigt holds the pressure on the normal components. Returns a
+    // (dof * dim) vector. In 2D, only plane stress assembles a non-zero load.
+    void DamagedPressureBodyForceLFIntegrator::AssembleRHSElementVect(const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
+    {
+        const int dof = el.GetDof();
+        const int dim = el.GetDim();
+        const int str_comp = detail::NumStrainComponents(dim);
+
+        dshape.SetSize(dof, dim);
+        gshape.SetSize(dof, dim);
+        shape.SetSize(dof);
+        elvect.SetSize(dof * dim);
+        elvec_input.SetSize(dof * dim);
+        elvect = 0.0;
+
+        detail::GatherElementValues(*damage_gf, *damage_fes, Tr.ElementNo, eldofs, eldofdamage);
+
+        const IntegrationRule &ir = detail::IntRuleOrDefault(GetIntegrationRule(el, Tr), el, Tr);
+
+        B.SetSize(str_comp, dof * dim);
+        body_pressure.SetSize(str_comp);
+        B = 0.0;
+        body_pressure = 0.0;
+
+        real_t NU(0.0);
+
+        for (int i = 0; i < ir.GetNPoints(); i++)
+        {
+            const IntegrationPoint &ip = ir.IntPoint(i);
+
+            el.CalcDShape(ip, dshape);
+            Tr.SetIntPoint(&ip);
+            el.CalcPhysShape(Tr, shape);
+
+            const real_t w = ip.weight * Tr.Weight();
+            const real_t degradation = detail::Degradation(InnerProduct(shape, eldofdamage), k_epsilon);
+            const real_t pressure_coeff = pressure->Eval(Tr, ip);
+            Mult(dshape, Tr.InverseJacobian(), gshape);
+
+            if (i == 0)
+            {
+                NU = poisson_ratio->Eval(Tr, ip);
+            }
+            detail::FillStrainDisplacement(gshape, dim, B);
+
+            if (dim == 2)
+            {
+                // 2D is not verified: only plane stress is handled; the plane strain load stays zero.
+                if (planeApprox == 1)
+                {
+                    body_pressure(0) = body_pressure(1) = pressure_coeff * detail::PlaneStressVolumetricFactor(NU);
+                }
+            }
+            else
+            {
+                body_pressure(0) = body_pressure(1) = body_pressure(2) = pressure_coeff;
+            }
+
+            B.MultTranspose(body_pressure, elvec_input);
+            add(elvect, w * degradation, elvec_input, elvect);
+        }
+    }
+
+    // Element vector of the eigenstrain body force in the elasticity equation: sum over quadrature points of
+    // w * ((1 - d)^2 + k_eps) * B^T (C alpha I), with C built from E and nu (first integration point). Returns a
+    // (dof * dim) vector.
     void DamagedIsotropicVolumetricEigenstrainBodyForceLFIntegrator::AssembleRHSElementVect(const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
     {
+        const int dof = el.GetDof();
+        const int dim = el.GetDim();
+        const int str_comp = detail::NumStrainComponents(dim);
+
+        dshape.SetSize(dof, dim);
+        gshape.SetSize(dof, dim);
+        shape.SetSize(dof);
+        elvect.SetSize(dof * dim);
+        elvec_input.SetSize(dof * dim);
+        elvect = 0.0;
+
+        detail::GatherElementValues(*damage_gf, *damage_fes, Tr.ElementNo, eldofs, eldofdamage);
+
+        const IntegrationRule &ir = detail::IntRuleOrDefault(GetIntegrationRule(el, Tr), el, Tr);
+
+        C.SetSize(str_comp, str_comp);
+        B.SetSize(str_comp, dof * dim);
+        identity.SetSize(str_comp);          // (1 1 1 0 0 0)
+        volumetric_stress.SetSize(str_comp); // Stiffness acting on identity, scaled by the strain coefficient
+        C = 0.0;
+        B = 0.0;
+        volumetric_stress = 0.0;
+        detail::FillVoigtIdentity(dim, identity);
+
+        real_t NU(0.0);
+
+        for (int i = 0; i < ir.GetNPoints(); i++)
         {
-            int dof = el.GetDof();
-            int dim = el.GetDim();
-            int str_comp = (dim == 2) ? 3 : 6;
-            int elnum = Tr.ElementNo;
+            const IntegrationPoint &ip = ir.IntPoint(i);
 
-            dshape.SetSize(dof, dim);
-            gshape.SetSize(dof, dim);
-            shape.SetSize(dof);
-            elvec_input.SetSize(dof * dim);
-            elvect.SetSize(dof * dim);
-            elvect = 0.0;
+            el.CalcDShape(ip, dshape);
+            Tr.SetIntPoint(&ip);
+            el.CalcPhysShape(Tr, shape);
 
-            eldofs.SetSize(dof); // scalar for damage
-            eldofdamage.SetSize(dof);
-            eldofs = 0;
-            eldofdamage = 0.0;
+            const real_t w = ip.weight * Tr.Weight();
+            const real_t degradation = detail::Degradation(InnerProduct(shape, eldofdamage), k_epsilon);
+            const real_t vol_strain_coeff = volumetric_strain_coeff->Eval(Tr, ip);
+            Mult(dshape, Tr.InverseJacobian(), gshape);
 
-            C.SetSize(str_comp, str_comp);       // Stiffness
-            B.SetSize(str_comp, dof * dim);      // Strain displacement matrix
-            identity.SetSize(str_comp);          // Identity (1 1 1 0 0 0)
-            volumetric_stress.SetSize(str_comp); // Stiffness tensor acting on identity multiplied by strain coeff
-            C = 0.0;
-            B = 0.0;
-
-            identity = 0.0; // Set appropriate components.
-            identity(0) = 1.0;
-            identity(1) = 1.0;
-            if (dim == 3)
-                identity(2) = 1.0;
-
-            volumetric_stress = 0.0;
-
-            damage_fes->GetElementDofs(elnum, eldofs);
-
-            for (int i = 0; i < eldofdamage.Size(); i++)
+            if (i == 0)
             {
-                eldofdamage(i) = (*damage_gf)(eldofs[i]);
+                NU = poisson_ratio->Eval(Tr, ip);
+                detail::FillIsotropicStiffness(young_mod->Eval(Tr, ip), NU, dim, planeApprox, C);
+            }
+            detail::FillStrainDisplacement(gshape, dim, B);
+
+            detail::VolumetricStress(C, identity, vol_strain_coeff, volumetric_stress);
+            if (dim == 2 && planeApprox == 1)
+            {
+                volumetric_stress *= detail::PlaneStressVolumetricFactor(NU); // 2D is not verified.
             }
 
-            // Great, eldofdamage is now set. Now need to use it to construct the interpolated damage value at each quadrature point.
-            // i.e., evaluate shape functions at each quadrature point and dot product with eldofdamage to get damage at that point.
-
-            const IntegrationRule *ir = GetIntegrationRule(el, Tr);
-            if (ir == NULL)
-            {
-                int order = 2 * el.GetOrder() + Tr.OrderGrad(&el);
-                ir = &IntRules.Get(el.GetGeomType(), order);
-            }
-            double w, NU, E;
-
-            double damage_value(0.0), degradation_constant(0.0);
-            double vol_strain_coeff(0.0);
-
-            for (int i = 0; i < ir->GetNPoints(); i++)
-            {
-                const IntegrationPoint &ip = ir->IntPoint(i);
-
-                el.CalcDShape(ip, dshape);
-                Tr.SetIntPoint(&ip);
-                el.CalcPhysShape(Tr, shape);
-
-                w = ip.weight * Tr.Weight(); // Quadrature weights
-
-                damage_value = InnerProduct(shape, eldofdamage);
-                degradation_constant = ((1.0 - damage_value) * (1.0 - damage_value)) + k_epsilon; // (1 - d)^{2} + k_{\epsilon}
-
-                vol_strain_coeff = volumetric_strain_coeff->Eval(Tr, ip);
-
-                if (i == 0)
-                {
-                    NU = poisson_ratio->Eval(Tr, ip);
-                    E = young_mod->Eval(Tr, ip); // The elastic constants are evaluated at the first integration point.
-                }
-                // Constant throughout element
-
-                Mult(dshape, Tr.InverseJacobian(), gshape); // Recovering the gradients of the shape functions in the physical space.
-
-                // Here we want to use Voigt notation to speed up the assembly process.
-                switch (dim)
-                {
-                case 2:
-                    if (i == 0)
-                    {
-                        switch (planeApprox)
-                        {
-                        case 0:
-                            // Plane strain
-                            C(0, 0) = C(1, 1) = E * (1.0 - NU) / ((1.0 + NU) * (1.0 - 2.0 * NU));
-                            C(0, 1) = C(1, 0) = E * NU / ((1.0 + NU) * (1.0 - 2.0 * NU));
-                            C(2, 2) = E / (2.0 * (1.0 + NU));
-                            break;
-
-                        case 1:
-                            // Plane stress
-                            C(0, 0) = C(1, 1) = (E / (1.0 - pow(NU, 2.0)));
-                            C(0, 1) = C(1, 0) = (E * NU / (1.0 - pow(NU, 2.0)));
-                            C(2, 2) = E / (2.0 * (1.0 + NU));
-                            break;
-                        }
-                    }
-
-                    // In 2D, we have 3 unique strain components.
-                    for (int spf = 0; spf < dof; spf++)
-                    {
-                        B(0, spf) = gshape(spf, 0);
-                        B(1, spf + dof) = gshape(spf, 1);
-                        B(2, spf) = gshape(spf, 1);
-                        B(2, spf + dof) = gshape(spf, 0);
-                    }
-
-                    // volumetric stress. Let stiffness C act on identity and multiply by strain coeff.
-                    C.Mult(identity, volumetric_stress);
-                    volumetric_stress *= vol_strain_coeff;
-
-                    switch (planeApprox)
-                    {
-                    case 1:
-                        // plane stress
-                        volumetric_stress *= (2.0 - (1.0 / (1.0 - NU)));
-                        break;
-                    }
-
-                    break;
-                case 3:
-                    if (i == 0)
-                    {
-                        C(0, 0) = C(1, 1) = C(2, 2) = (E * (1 - NU)) / ((1 - 2 * NU) * (1 + NU));
-                        C(0, 1) = C(0, 2) = C(1, 0) = C(1, 2) = C(2, 0) = C(2, 1) = (E * NU) / ((1 - 2 * NU) * (1 + NU));
-                        C(3, 3) = C(4, 4) = C(5, 5) = E / (2 * (1 + NU));
-                    }
-
-                    // In 3D, we have 6 unique strain components.
-                    for (int spf = 0; spf < dof; spf++)
-                    {
-                        B(0, spf) = gshape(spf, 0);
-                        B(1, spf + dof) = gshape(spf, 1);
-                        B(2, spf + 2 * dof) = gshape(spf, 2);
-                        B(3, spf + dof) = gshape(spf, 2);
-                        B(3, spf + 2 * dof) = gshape(spf, 1);
-                        B(4, spf) = gshape(spf, 2);
-                        B(4, spf + 2 * dof) = gshape(spf, 0);
-                        B(5, spf) = gshape(spf, 1);
-                        B(5, spf + dof) = gshape(spf, 0);
-                    }
-
-                    // volumetric stress. Let stiffness C act on identity and multiply by strain coeff.
-                    C.Mult(identity, volumetric_stress);
-                    volumetric_stress *= vol_strain_coeff;
-
-                    break;
-                }
-                B.MultTranspose(volumetric_stress, elvec_input);
-                add(elvect, w * degradation_constant, elvec_input, elvect);
-            }
+            B.MultTranspose(volumetric_stress, elvec_input);
+            add(elvect, w * degradation, elvec_input, elvect);
         }
     }
 
