@@ -6,7 +6,8 @@
 #define MFEMPLUS_SOLIDS
 
 // Fracture headers
-#include "Fracture/bilininteg.hpp"
-#include "Fracture/lininteg.hpp"
+#include "mfemplus/SolidMechanics/Fracture/bilininteg.hpp"
+#include "mfemplus/SolidMechanics/Fracture/lininteg.hpp"
+#include "mfemplus/SolidMechanics/Fracture/energy.hpp"
 
 #endif

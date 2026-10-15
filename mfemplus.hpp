@@ -2,10 +2,10 @@
 // //            Include mfemplus headers.
 // //------------------------------------------------------------------------------------------------------------------
 
-#ifndef MFEMPLUS_new
-#define MFEMPLUS_new
+#ifndef MFEMPLUS
+#define MFEMPLUS
 
 // Solid mechanics headers
-#include "SolidMechanics/mfemplus_solids.hpp"
+#include "mfemplus/SolidMechanics/mfemplus_solids.hpp"
 
 #endif

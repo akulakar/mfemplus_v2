@@ -4,8 +4,8 @@
 //------------------------------------------------------------------------------------------------------------
 //------------------------------------------------------------------------------------------------------------
 
-#include "lininteg.hpp"
-#include "fracture_utils.hpp"
+#include "mfemplus/SolidMechanics/Fracture/lininteg.hpp"
+#include "mfemplus/SolidMechanics/Fracture/fracture_utils.hpp"
 
 using namespace std;
 using namespace mfem;
@@ -18,6 +18,8 @@ namespace mfemplus
     //
     // Damage equation right hand sides (scalar damage space) integrate twice the energy density against the shape
     // functions. Body force right hand sides (vector displacement space) integrate B^T (stress) scaled by the degradation.
+    // The isotropic integrators use the closed form C = lambda I(x)I + 2 mu I_sym and never form B or C; only the
+    // anisotropic one uses the Voigt B and C matrices.
     // Isotropic integrators evaluate E and nu at the first integration point only (constant per element).
     // -------------------------------------------------------------------------------------------------------------------------
     // -------------------------------------------------------------------------------------------------------------------------
@@ -27,47 +29,22 @@ namespace mfemplus
     void IsotropicStrainEnergyDamageLFIntegrator::AssembleRHSElementVect(const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
     {
         const int dof = el.GetDof();
-        const int dim = el.GetDim();
-        const int str_comp = detail::NumStrainComponents(dim);
 
         shape.SetSize(dof);
-        dshape.SetSize(dof, dim);
-        gshape.SetSize(dof, dim);
         elvect.SetSize(dof);
         elvect = 0.0;
 
-        detail::GatherElementValues(*disp_gf, *disp_fes, Tr.ElementNo, eldofs, eldofdisp);
-
-        const IntegrationRule &ir = detail::IntRuleOrDefault(GetIntegrationRule(el, Tr), el, Tr);
-
-        C.SetSize(str_comp, str_comp);
-        B.SetSize(str_comp, dof * dim);
-        CBu.SetSize(str_comp);
-        Bu.SetSize(str_comp);
-        C = 0.0;
-        B = 0.0;
+        // Twice the energy density at the quadrature points: computed here or read from the shared QuadratureFunction.
+        const IntegrationRule &ir = energy_source.GetEnergyAndRule(detail::IntRuleOrDefault(GetIntegrationRule(el, Tr), el, Tr), el, Tr, energy);
 
         for (int i = 0; i < ir.GetNPoints(); i++)
         {
             const IntegrationPoint &ip = ir.IntPoint(i);
 
-            el.CalcDShape(ip, dshape);
             Tr.SetIntPoint(&ip);
             el.CalcPhysShape(Tr, shape);
 
-            const real_t w = ip.weight * Tr.Weight();
-            Mult(dshape, Tr.InverseJacobian(), gshape);
-
-            if (i == 0)
-            {
-                detail::FillIsotropicStiffness(young_mod->Eval(Tr, ip), poisson_ratio->Eval(Tr, ip), dim, planeApprox, C);
-            }
-            detail::FillStrainDisplacement(gshape, dim, B);
-
-            // Twice the strain energy, C_{ijkl} u_{k,l} u_{i,j}.
-            const real_t strain_energy = detail::TwiceStrainEnergy(C, B, eldofdisp, Bu, CBu);
-
-            add(elvect, w * strain_energy, shape, elvect);
+            add(elvect, ip.weight * Tr.Weight() * energy(i), shape, elvect);
         }
     }
 
@@ -76,58 +53,22 @@ namespace mfemplus
     void IsotropicStrainEnergyPressureDamageLFIntegrator::AssembleRHSElementVect(const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
     {
         const int dof = el.GetDof();
-        const int dim = el.GetDim();
-        const int str_comp = detail::NumStrainComponents(dim);
 
         shape.SetSize(dof);
-        dshape.SetSize(dof, dim);
-        gshape.SetSize(dof, dim);
         elvect.SetSize(dof);
         elvect = 0.0;
 
-        detail::GatherElementValues(*disp_gf, *disp_fes, Tr.ElementNo, eldofs, eldofdisp);
-
-        const IntegrationRule &ir = detail::IntRuleOrDefault(GetIntegrationRule(el, Tr), el, Tr);
-
-        C.SetSize(str_comp, str_comp);
-        B.SetSize(str_comp, dof * dim);
-        CBu.SetSize(str_comp);
-        Bu.SetSize(str_comp);
-        body_pressure.SetSize(str_comp);
-        C = 0.0;
-        B = 0.0;
-        body_pressure = 0.0;
-
-        real_t E(0.0), NU(0.0), quadratic_pressure_energy(0.0);
+        // Twice the energy density at the quadrature points: computed here or read from the shared QuadratureFunction.
+        const IntegrationRule &ir = energy_source.GetEnergyAndRule(detail::IntRuleOrDefault(GetIntegrationRule(el, Tr), el, Tr), el, Tr, energy);
 
         for (int i = 0; i < ir.GetNPoints(); i++)
         {
             const IntegrationPoint &ip = ir.IntPoint(i);
 
-            el.CalcDShape(ip, dshape);
             Tr.SetIntPoint(&ip);
             el.CalcPhysShape(Tr, shape);
 
-            const real_t w = ip.weight * Tr.Weight();
-            Mult(dshape, Tr.InverseJacobian(), gshape);
-
-            if (i == 0)
-            {
-                NU = poisson_ratio->Eval(Tr, ip);
-                E = young_mod->Eval(Tr, ip);
-                detail::FillIsotropicStiffness(E, NU, dim, planeApprox, C);
-            }
-            detail::FillStrainDisplacement(gshape, dim, B);
-
-            // Volumetric pressure, evaluated at each integration point.
-            detail::SetPressureTerms(dim, planeApprox, volumetric_pressure->Eval(Tr, ip), E, NU, body_pressure, quadratic_pressure_energy);
-
-            // Twice the total energy: C_{ijkl} u_{k,l} u_{i,j} - 2 p : strain + 2 (quadratic pressure energy).
-            const real_t strain_energy = detail::TwiceStrainEnergy(C, B, eldofdisp, Bu, CBu);
-            const real_t pressure_energy = InnerProduct(body_pressure, Bu);
-            const real_t total_energy = strain_energy - 2.0 * pressure_energy + 2.0 * quadratic_pressure_energy;
-
-            add(elvect, w * total_energy, shape, elvect);
+            add(elvect, ip.weight * Tr.Weight() * energy(i), shape, elvect);
         }
     }
 
@@ -137,78 +78,22 @@ namespace mfemplus
     void IsotropicStrainEnergyVolumetricEigenStrainDamageLFIntegrator::AssembleRHSElementVect(const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
     {
         const int dof = el.GetDof();
-        const int dim = el.GetDim();
-        const int str_comp = detail::NumStrainComponents(dim);
 
         shape.SetSize(dof);
-        dshape.SetSize(dof, dim);
-        gshape.SetSize(dof, dim);
         elvect.SetSize(dof);
         elvect = 0.0;
 
-        detail::GatherElementValues(*disp_gf, *disp_fes, Tr.ElementNo, eldofs, eldofdisp);
-
-        const IntegrationRule &ir = detail::IntRuleOrDefault(GetIntegrationRule(el, Tr), el, Tr);
-
-        C.SetSize(str_comp, str_comp);
-        B.SetSize(str_comp, dof * dim);
-        CBu.SetSize(str_comp);
-        Bu.SetSize(str_comp);
-        identity.SetSize(str_comp);
-        volumetric_stress.SetSize(str_comp);
-        C = 0.0;
-        B = 0.0;
-        volumetric_stress = 0.0;
-        detail::FillVoigtIdentity(dim, identity);
-
-        real_t E(0.0), NU(0.0), quadratic_volumetric_strain_energy(0.0), total_energy(0.0);
+        // Twice the energy density at the quadrature points: computed here or read from the shared QuadratureFunction.
+        const IntegrationRule &ir = energy_source.GetEnergyAndRule(detail::IntRuleOrDefault(GetIntegrationRule(el, Tr), el, Tr), el, Tr, energy);
 
         for (int i = 0; i < ir.GetNPoints(); i++)
         {
             const IntegrationPoint &ip = ir.IntPoint(i);
 
-            el.CalcDShape(ip, dshape);
             Tr.SetIntPoint(&ip);
             el.CalcPhysShape(Tr, shape);
 
-            const real_t w = ip.weight * Tr.Weight();
-            Mult(dshape, Tr.InverseJacobian(), gshape);
-
-            const real_t vol_strain_coeff = volumetric_strain_coeff->Eval(Tr, ip);
-
-            if (i == 0)
-            {
-                NU = poisson_ratio->Eval(Tr, ip);
-                E = young_mod->Eval(Tr, ip);
-                detail::FillIsotropicStiffness(E, NU, dim, planeApprox, C);
-            }
-            detail::FillStrainDisplacement(gshape, dim, B);
-
-            // Isotropic eigenstrain alpha * I gives the volumetric stress C (alpha I).
-            detail::VolumetricStress(C, identity, vol_strain_coeff, volumetric_stress);
-
-            // 2D is not verified: no quadratic term, and the volumetric stress is not corrected for plane stress here.
-            if (dim == 3)
-            {
-                // (1/2) alpha^2 I^T C I. Note volumetric_stress already contains one factor of alpha.
-                quadratic_volumetric_strain_energy = 0.5 * vol_strain_coeff * InnerProduct(volumetric_stress, identity);
-            }
-
-            // Twice the energy density, (strain - alpha I)^T C (strain - alpha I), unless the Gershgorin check on the
-            // effective stress fails. In that case the energy is scaled by 1e-20 (the value kept from the previous
-            // integration point, 0 at the first one), i.e. effectively dropped.
-            const real_t strain_energy = detail::TwiceStrainEnergy(C, B, eldofdisp, Bu, CBu);
-            if (detail::EffectiveStressBoundIsNegative(dim, CBu, volumetric_stress))
-            {
-                total_energy *= 1e-20;
-            }
-            else
-            {
-                const real_t volumetric_strain_energy = InnerProduct(volumetric_stress, Bu);
-                total_energy = strain_energy - 2.0 * volumetric_strain_energy + 2.0 * quadratic_volumetric_strain_energy;
-            }
-
-            add(elvect, w * total_energy, shape, elvect);
+            add(elvect, ip.weight * Tr.Weight() * energy(i), shape, elvect);
         }
     }
 
@@ -278,9 +163,7 @@ namespace mfemplus
 
         const IntegrationRule &ir = detail::IntRuleOrDefault(GetIntegrationRule(el, Tr), el, Tr);
 
-        B.SetSize(str_comp, dof * dim);
         body_pressure.SetSize(str_comp);
-        B = 0.0;
         body_pressure = 0.0;
 
         real_t NU(0.0);
@@ -302,7 +185,6 @@ namespace mfemplus
             {
                 NU = poisson_ratio->Eval(Tr, ip);
             }
-            detail::FillStrainDisplacement(gshape, dim, B);
 
             if (dim == 2)
             {
@@ -317,7 +199,7 @@ namespace mfemplus
                 body_pressure(0) = body_pressure(1) = body_pressure(2) = pressure_coeff;
             }
 
-            B.MultTranspose(body_pressure, elvec_input);
+            detail::StrainDisplacementTransposeNormal(gshape, dim, body_pressure, elvec_input);
             add(elvect, w * degradation, elvec_input, elvect);
         }
     }
@@ -342,16 +224,10 @@ namespace mfemplus
 
         const IntegrationRule &ir = detail::IntRuleOrDefault(GetIntegrationRule(el, Tr), el, Tr);
 
-        C.SetSize(str_comp, str_comp);
-        B.SetSize(str_comp, dof * dim);
-        identity.SetSize(str_comp);          // (1 1 1 0 0 0)
         volumetric_stress.SetSize(str_comp); // Stiffness acting on identity, scaled by the strain coefficient
-        C = 0.0;
-        B = 0.0;
         volumetric_stress = 0.0;
-        detail::FillVoigtIdentity(dim, identity);
 
-        real_t NU(0.0);
+        real_t NU(0.0), lambda(0.0), mu(0.0);
 
         for (int i = 0; i < ir.GetNPoints(); i++)
         {
@@ -369,17 +245,16 @@ namespace mfemplus
             if (i == 0)
             {
                 NU = poisson_ratio->Eval(Tr, ip);
-                detail::FillIsotropicStiffness(young_mod->Eval(Tr, ip), NU, dim, planeApprox, C);
+                detail::IsotropicLame(young_mod->Eval(Tr, ip), NU, dim, planeApprox, lambda, mu);
             }
-            detail::FillStrainDisplacement(gshape, dim, B);
 
-            detail::VolumetricStress(C, identity, vol_strain_coeff, volumetric_stress);
+            detail::IsotropicVolumetricStress(dim, lambda, mu, vol_strain_coeff, volumetric_stress);
             if (dim == 2 && planeApprox == 1)
             {
                 volumetric_stress *= detail::PlaneStressVolumetricFactor(NU); // 2D is not verified.
             }
 
-            B.MultTranspose(volumetric_stress, elvec_input);
+            detail::StrainDisplacementTransposeNormal(gshape, dim, volumetric_stress, elvec_input);
             add(elvect, w * degradation, elvec_input, elvect);
         }
     }
