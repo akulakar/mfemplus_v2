@@ -17,46 +17,14 @@ The installed MFEM CMake config in this environment fails to import (`adios2::ad
 CMake build was only checked with a stub `mfem` target; direct `mpicxx` builds with `-I<repo root>` work.
 
 ## Layout
-- `mfemplus/SolidMechanics/Fracture`: variational (phase-field) fracture integrators.
-  - `bilininteg.*`: BilinearFormIntegrators (elasticity with degraded stiffness, and damage-equation
-    terms of the form `∫ 2W(u) d φ`).
-  - `lininteg.*`: matching LinearFormIntegrators (damage RHS, body forces/eigenstrain).
-  - `energy.*`: strain energy evaluators and the shared `QuadratureFunction` path.
-  - `operators.*` (empty), `fracture_utils.hpp` (internal helpers).
-- `mfemplus/SolidMechanics/solid_mechanics_utils.hpp` (internal shared Voigt kernels),
-  `mfemplus/SolidMechanics/General` (strain/stress helpers; mostly empty).
-- `mfemplus/FluidMechanics`, `mfemplus/SolidMechanics/{Hyperelasticity,LinearElasticity,Viscoelasticity}`,
-  `config`, `documentation` (repo root): empty placeholders.
+- `mfemplus/SolidMechanics`: solid-mechanics modules (Fracture, General, and empty Hyperelasticity /
+  LinearElasticity / Viscoelasticity placeholders); see `mfemplus/SolidMechanics/CLAUDE.md` for shared conventions
+  (Voigt, isotropic kernels) and `mfemplus/SolidMechanics/Fracture/CLAUDE.md` for the phase-field fracture module.
+- `mfemplus/FluidMechanics/CompressibleFlow`: `HLLCFlux` numerical flux for the Euler equations (`hyperbolic.*`),
+  plus `reference_files/` (MFEM and CAMR sources, read-only); see `mfemplus/FluidMechanics/CompressibleFlow/CLAUDE.md`.
+  It is not yet in CMake (`add_subdirectory(FluidMechanics)` is commented out) and has not been compiled.
+- `config`, `documentation` (repo root): empty placeholders.
 
-## Conventions that span files
-- Integrators take the displacement `GridFunction` + its `FiniteElementSpace` and read element dofs with
-  `GetElementVDofs`; the integrator's own element matrix/vector is for the scalar damage space.
-- Strains/stresses are Voigt vectors (engineering shear): `Bu` strain, `CBu` stress, ordering (xx,yy,xy) in 2D and
-  (xx,yy,zz,yz,xz,xy) in 3D. `planeApprox` 0 = plane strain, 1 = plane stress for 2D.
-- Isotropic integrators never form `B` or `C`: they use C = λ I⊗I + 2μ I_sym in closed form
-  (`detail::IsotropicLame`, `AddIsotropicStiffness`, `TwiceIsotropicStrainEnergy`, `IsotropicVolumetricStress`).
-  Plane stress only changes λ to Eν/(1−ν²). Only the Anisotropic* integrators use the dense Voigt `B` and `C`.
-- E and ν are evaluated only at the first integration point of an element (assumed constant per element).
-- The `...VolumetricEigenStrain...` pair (`bilininteg.cpp` and `lininteg.cpp`) must stay in sync: both
-  assemble 2W = (ε−ε*)ᵀC(ε−ε*) with ε* = α·I, i.e. εᵀCε − 2α(CI)·ε + α²IᵀCI. The quadratic term is
-  `0.5 * α * InnerProduct(C·I·α, I)`; `volumetric_stress` already contains one factor of α.
-- Integrators assemble 2W, not W (factor absorbed by the caller's coefficients).
-- Damage forms depend on u, so the element matrix can be exactly zero at the first assembly; build such
-  `BilinearForm`s with `Assemble(0)`/`Finalize(0)` (skip_zeros=0) or MFEM throws
-  "Entry for column N is not allocated" on later reassembly.
-- The two VolumetricEigenStrain integrators apply a Gershgorin-type check on (stress - volumetric stress)
-  (`detail::EffectiveStressBoundIsNegative`); if it fails, the energy is scaled by 1e-20 (effectively dropped).
-  The check is on by default and can be disabled with the trailing `use_gershgorin_check` constructor argument
-  (matrix, LF and evaluator must be given the same value; with a shared `QuadratureFunction` this is automatic).
-  The Pressure integrators/evaluator support the same trailing `use_gershgorin_check` argument (checked against the
-  pressure vector), but it is OFF by default there. The other integrators have no such check.
-- `fracture_utils.hpp` and `solid_mechanics_utils.hpp` (namespace `mfemplus::detail`) hold the shared kernels (closed-form isotropic stiffness/
-  energy, Voigt B matrix for the anisotropic path, Gershgorin check); the integrators should use it instead of
-  re-implementing them.
-- Quadrature default is order 2p + `OrderGrad` for all fracture integrators (bilinear and linear forms must match).
-- Damage-equation energy 2W lives in `Fracture/energy.*` (`Isotropic...Evaluator` classes, one per variant: plain,
-  Pressure, VolumetricEigenStrain). The matching bilinear and LF integrators each have two constructors: the usual one
-  (E, ν, u, ...) evaluates 2W on the fly through an evaluator; the other takes a `QuadratureFunction` filled by
-  `Evaluator::Evaluate(W)` (call it after every displacement update) and integrates with the rule of its
-  `QuadratureSpace`, so matrix and RHS share one energy and one rule. The matrix and LF therefore always use the same
-  2D formulas too.
+## Shell commands
+When the user runs a command with the `!` prefix (it shows up as `<bash-input>` / `<bash-stdout>`),
+don't respond to it. Only comment on the output if the user asks a question about it.
