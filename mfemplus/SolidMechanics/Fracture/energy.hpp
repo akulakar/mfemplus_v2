@@ -65,16 +65,20 @@ namespace mfemplus
 
     /** 2W = C_{ijkl} u_{k,l} u_{i,j} - 2 p tr(eps) + (quadratic term in p), with the volumetric pressure p evaluated at
        each integration point. Only the 3D and the 2D plane stress cases carry the pressure terms.
+       Optionally (off by default) applies the Gershgorin-type switch: the energy is scaled by 1e-20 where the
+       effective stress (stress - pressure) is not guaranteed to be in tension, see `detail::EffectiveStressBoundIsNegative`.
     **/
     class IsotropicStrainEnergyPressureEvaluator : public StrainEnergyEvaluator
     {
     protected:
         mfem::Coefficient *volumetric_pressure;
         mfem::Vector body_pressure;
+        bool gershgorin_check;
 
     public:
-        IsotropicStrainEnergyPressureEvaluator(mfem::Coefficient &e, mfem::Coefficient &nu, mfem::Coefficient &vol_pressure, mfem::GridFunction &disp_gridfunc, mfem::FiniteElementSpace *disp_fespace, int plane_approximation = 0)
-            : StrainEnergyEvaluator(e, nu, disp_gridfunc, disp_fespace, plane_approximation), volumetric_pressure(&vol_pressure) {}
+        /// `use_gershgorin_check` (default false) switches the Gershgorin-type tension check on or off.
+        IsotropicStrainEnergyPressureEvaluator(mfem::Coefficient &e, mfem::Coefficient &nu, mfem::Coefficient &vol_pressure, mfem::GridFunction &disp_gridfunc, mfem::FiniteElementSpace *disp_fespace, int plane_approximation = 0, bool use_gershgorin_check = false)
+            : StrainEnergyEvaluator(e, nu, disp_gridfunc, disp_fespace, plane_approximation), volumetric_pressure(&vol_pressure), gershgorin_check(use_gershgorin_check) {}
 
         void ElementEnergy(const mfem::FiniteElement &el, mfem::ElementTransformation &Tr, const mfem::IntegrationRule &ir, mfem::Vector &energy) override;
     };

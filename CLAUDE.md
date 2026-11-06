@@ -48,7 +48,8 @@ CMake build was only checked with a stub `mfem` target; direct `mpicxx` builds w
   (`detail::EffectiveStressBoundIsNegative`); if it fails, the energy is scaled by 1e-20 (effectively dropped).
   The check is on by default and can be disabled with the trailing `use_gershgorin_check` constructor argument
   (matrix, LF and evaluator must be given the same value; with a shared `QuadratureFunction` this is automatic).
-  The other integrators have no such check.
+  The Pressure integrators/evaluator support the same trailing `use_gershgorin_check` argument (checked against the
+  pressure vector), but it is OFF by default there. The other integrators have no such check.
 - `fracture_utils.hpp` and `solid_mechanics_utils.hpp` (namespace `mfemplus::detail`) hold the shared kernels (closed-form isotropic stiffness/
   energy, Voigt B matrix for the anisotropic path, Gershgorin check); the integrators should use it instead of
   re-implementing them.

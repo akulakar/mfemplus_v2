@@ -46,6 +46,7 @@ namespace mfemplus
         const IntegrationRule &ir = detail::IntRuleOrDefault(GetIntegrationRule(el, Trans), el, Trans);
 
         real_t lambda(0.0), mu(0.0);
+        bool damaged = true; // A zero damage flag leaves the element undamaged (degradation = 1).
 
         for (int i = 0; i < ir.GetNPoints(); i++)
         {
@@ -55,14 +56,13 @@ namespace mfemplus
             Trans.SetIntPoint(&ip);
             el.CalcPhysShape(Trans, shape);
 
+            detail::IsotropicLame(young_mod->Eval(Trans, ip), poisson_ratio->Eval(Trans, ip), dim, planeApprox, lambda, mu);
+            damaged = (damage_flag == nullptr) || (damage_flag->Eval(Trans, ip) != 0.0);
+
             const real_t w = ip.weight * Trans.Weight();
-            const real_t degradation = detail::Degradation(InnerProduct(shape, eldofdamage), k_epsilon);
+            const real_t degradation = damaged ? detail::Degradation(InnerProduct(shape, eldofdamage), k_epsilon) : 1.0;
             Mult(dshape, Trans.InverseJacobian(), gshape); // Physical shape function gradients.
 
-            if (i == 0)
-            {
-                detail::IsotropicLame(young_mod->Eval(Trans, ip), poisson_ratio->Eval(Trans, ip), dim, planeApprox, lambda, mu);
-            }
             detail::AddIsotropicStiffness(gshape, dim, w * degradation, lambda, mu, elmat);
         }
     }

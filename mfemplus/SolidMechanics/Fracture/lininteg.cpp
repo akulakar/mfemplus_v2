@@ -181,10 +181,7 @@ namespace mfemplus
             const real_t pressure_coeff = pressure->Eval(Tr, ip);
             Mult(dshape, Tr.InverseJacobian(), gshape);
 
-            if (i == 0)
-            {
-                NU = poisson_ratio->Eval(Tr, ip);
-            }
+            NU = poisson_ratio->Eval(Tr, ip);
 
             if (dim == 2)
             {
@@ -242,11 +239,8 @@ namespace mfemplus
             const real_t vol_strain_coeff = volumetric_strain_coeff->Eval(Tr, ip);
             Mult(dshape, Tr.InverseJacobian(), gshape);
 
-            if (i == 0)
-            {
-                NU = poisson_ratio->Eval(Tr, ip);
-                detail::IsotropicLame(young_mod->Eval(Tr, ip), NU, dim, planeApprox, lambda, mu);
-            }
+            NU = poisson_ratio->Eval(Tr, ip);
+            detail::IsotropicLame(young_mod->Eval(Tr, ip), NU, dim, planeApprox, lambda, mu);
 
             detail::IsotropicVolumetricStress(dim, lambda, mu, vol_strain_coeff, volumetric_stress);
             if (dim == 2 && planeApprox == 1)
@@ -256,6 +250,50 @@ namespace mfemplus
 
             detail::StrainDisplacementTransposeNormal(gshape, dim, volumetric_stress, elvec_input);
             add(elvect, w * degradation, elvec_input, elvect);
+        }
+    }
+
+    // Element vector of the body force in the elasticity equation: sum over quadrature points of
+    // w * ((1 - d)^2 + k_eps) * f * phi_i. Returns a (dof * dim) vector, ordered by component (a + i * dof).
+    void DamagedBodyForceLFIntegrator::AssembleRHSElementVect(const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
+    {
+        const int dof = el.GetDof();
+        const int vdim = Tr.GetSpaceDim();
+
+        shape.SetSize(dof);
+        force.SetSize(vdim);
+        elvect.SetSize(dof * vdim);
+        elvect = 0.0;
+
+        detail::GatherElementValues(*damage_gf, *damage_fes, Tr.ElementNo, eldofs, eldofdamage);
+
+        const IntegrationRule &ir = detail::IntRuleOrDefault(GetIntegrationRule(el, Tr), el, Tr);
+
+        bool damaged = true; // A zero damage flag leaves the element undamaged (degradation = 1).
+
+        for (int i = 0; i < ir.GetNPoints(); i++)
+        {
+            const IntegrationPoint &ip = ir.IntPoint(i);
+
+            Tr.SetIntPoint(&ip);
+            el.CalcPhysShape(Tr, shape);
+
+            if (i == 0)
+            {
+                damaged = (damage_flag == nullptr) || (damage_flag->Eval(Tr, ip) != 0.0);
+            }
+
+            const real_t w = ip.weight * Tr.Weight();
+            const real_t degradation = damaged ? detail::Degradation(InnerProduct(shape, eldofdamage), k_epsilon) : 1.0;
+            body_force->Eval(force, Tr, ip);
+
+            for (int d = 0; d < vdim; d++)
+            {
+                for (int a = 0; a < dof; a++)
+                {
+                    elvect(a + d * dof) += w * degradation * force(d) * shape(a);
+                }
+            }
         }
     }
 

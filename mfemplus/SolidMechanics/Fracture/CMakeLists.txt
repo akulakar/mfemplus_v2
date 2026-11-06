@@ -1,6 +1,7 @@
 add_library(fracture
             bilininteg.cpp
             lininteg.cpp
+            nonlininteg.cpp
             energy.cpp
 )
 

@@ -59,15 +59,15 @@ namespace mfemplus
             Tr.SetIntPoint(&ip);
             Mult(dshape, Tr.InverseJacobian(), gshape);
 
-            if (i == 0)
-            {
-                detail::IsotropicLame(young_mod->Eval(Tr, ip), poisson_ratio->Eval(Tr, ip), dim, planeApprox, lambda, mu);
-            }
+            detail::IsotropicLame(young_mod->Eval(Tr, ip), poisson_ratio->Eval(Tr, ip), dim, planeApprox, lambda, mu);
+
             energy(i) = detail::TwiceIsotropicStrainEnergy(gshape, dim, eldofdisp, lambda, mu, Bu, CBu);
         }
     }
 
     // 2W = strain energy - 2 (pressure . strain) + 2 (quadratic pressure energy), see detail::SetPressureTerms.
+    // If the (optional) Gershgorin check on the effective stress fails at a point, the energy there is scaled by 1e-20
+    // (the value kept from the previous integration point, 0 at the first one).
     void IsotropicStrainEnergyPressureEvaluator::ElementEnergy(
         const FiniteElement &el, ElementTransformation &Tr, const IntegrationRule &ir, Vector &energy)
     {
@@ -76,7 +76,7 @@ namespace mfemplus
         body_pressure.SetSize(detail::NumStrainComponents(dim));
         body_pressure = 0.0;
 
-        real_t E(0.0), NU(0.0), lambda(0.0), mu(0.0), quadratic_pressure_energy(0.0);
+        real_t E(0.0), NU(0.0), lambda(0.0), mu(0.0), quadratic_pressure_energy(0.0), total_energy(0.0);
 
         for (int i = 0; i < ir.GetNPoints(); i++)
         {
@@ -86,17 +86,22 @@ namespace mfemplus
             Tr.SetIntPoint(&ip);
             Mult(dshape, Tr.InverseJacobian(), gshape);
 
-            if (i == 0)
-            {
-                NU = poisson_ratio->Eval(Tr, ip);
-                E = young_mod->Eval(Tr, ip);
-                detail::IsotropicLame(E, NU, dim, planeApprox, lambda, mu);
-            }
+            NU = poisson_ratio->Eval(Tr, ip);
+            E = young_mod->Eval(Tr, ip);
+            detail::IsotropicLame(E, NU, dim, planeApprox, lambda, mu);
             detail::SetPressureTerms(dim, planeApprox, volumetric_pressure->Eval(Tr, ip), E, NU, body_pressure, quadratic_pressure_energy);
 
             const real_t strain_energy = detail::TwiceIsotropicStrainEnergy(gshape, dim, eldofdisp, lambda, mu, Bu, CBu);
-            const real_t pressure_energy = InnerProduct(body_pressure, Bu);
-            energy(i) = strain_energy - 2.0 * pressure_energy + 2.0 * quadratic_pressure_energy;
+            if (gershgorin_check && detail::EffectiveStressBoundIsNegative(dim, CBu, body_pressure))
+            {
+                total_energy = 1.0e-20;
+            }
+            else
+            {
+                const real_t pressure_energy = InnerProduct(body_pressure, Bu);
+                total_energy = strain_energy - 2.0 * pressure_energy + 2.0 * quadratic_pressure_energy;
+            }
+            energy(i) = total_energy;
         }
     }
 
@@ -127,12 +132,9 @@ namespace mfemplus
 
             const real_t vol_strain_coeff = volumetric_strain_coeff->Eval(Tr, ip);
 
-            if (i == 0)
-            {
-                NU = poisson_ratio->Eval(Tr, ip);
-                E = young_mod->Eval(Tr, ip);
-                detail::IsotropicLame(E, NU, dim, planeApprox, lambda, mu);
-            }
+            NU = poisson_ratio->Eval(Tr, ip);
+            E = young_mod->Eval(Tr, ip);
+            detail::IsotropicLame(E, NU, dim, planeApprox, lambda, mu);
 
             // Isotropic eigenstrain alpha * I gives the volumetric stress C (alpha I).
             detail::IsotropicVolumetricStress(dim, lambda, mu, vol_strain_coeff, volumetric_stress);
@@ -155,7 +157,7 @@ namespace mfemplus
             const real_t strain_energy = detail::TwiceIsotropicStrainEnergy(gshape, dim, eldofdisp, lambda, mu, Bu, CBu);
             if (gershgorin_check && detail::EffectiveStressBoundIsNegative(dim, CBu, volumetric_stress))
             {
-                total_energy *= 1e-20;
+                total_energy = 1.0e-20;
             }
             else
             {

@@ -30,6 +30,9 @@ namespace mfemplus
        The damage d is read from the grid function `damage_gf` and interpolated at each integration point.
        E and nu are evaluated at the first integration point (constant per element). In 2D, `plane_approximation`
        selects plane strain (0) or plane stress (1).
+       The optional `damage_flag` coefficient (e.g. a PWConstCoefficient) is evaluated at the first integration point
+       of an element: if it is 0 the element is not damaged (degradation = 1), otherwise the degradation above applies.
+       nullptr (default) damages every element.
        This is a 'Vector' integrator, i.e. defined for FE spaces using multiple copies of a scalar FE space.
     **/
     class DamagedIsotropicElasticityIntegrator : public mfem::BilinearFormIntegrator
@@ -37,6 +40,7 @@ namespace mfemplus
 
     protected:
         mfem::Coefficient *young_mod, *poisson_ratio;
+        mfem::Coefficient *damage_flag;
         mfem::real_t k_epsilon;
         mfem::GridFunction *damage_gf;
         mfem::FiniteElementSpace *damage_fes;
@@ -48,7 +52,7 @@ namespace mfemplus
         // Optionally also include a option for the degradation function.
 
     public:
-        DamagedIsotropicElasticityIntegrator(mfem::Coefficient &e, mfem::Coefficient &nu, mfem::real_t k_eps, mfem::GridFunction &damage_gridfunc, mfem::FiniteElementSpace *damage_fespace, int plane_approximation = 0) : young_mod(&e), poisson_ratio(&nu), k_epsilon(k_eps), damage_gf(&damage_gridfunc), damage_fes(damage_fespace), planeApprox(plane_approximation) {}
+        DamagedIsotropicElasticityIntegrator(mfem::Coefficient &e, mfem::Coefficient &nu, mfem::real_t k_eps, mfem::GridFunction &damage_gridfunc, mfem::FiniteElementSpace *damage_fespace, int plane_approximation = 0, mfem::Coefficient *damage_flag_coeff = nullptr) : young_mod(&e), poisson_ratio(&nu), damage_flag(damage_flag_coeff), k_epsilon(k_eps), damage_gf(&damage_gridfunc), damage_fes(damage_fespace), planeApprox(plane_approximation) {}
 
         void AssembleElementMatrix(const mfem::FiniteElement &el, mfem::ElementTransformation &Tr, mfem::DenseMatrix &elmat) override;
     };
@@ -130,7 +134,7 @@ namespace mfemplus
         mfem::Vector energy, shape;
 
     public:
-        IsotropicStrainEnergyPressureDamageIntegrator(mfem::Coefficient &e, mfem::Coefficient &nu, mfem::Coefficient &vol_pressure, mfem::GridFunction &disp_gridfunc, mfem::FiniteElementSpace *disp_fespace, int plane_approximation = 0) : energy_source(std::make_unique<IsotropicStrainEnergyPressureEvaluator>(e, nu, vol_pressure, disp_gridfunc, disp_fespace, plane_approximation)) {}
+        IsotropicStrainEnergyPressureDamageIntegrator(mfem::Coefficient &e, mfem::Coefficient &nu, mfem::Coefficient &vol_pressure, mfem::GridFunction &disp_gridfunc, mfem::FiniteElementSpace *disp_fespace, int plane_approximation = 0, bool use_gershgorin_check = false) : energy_source(std::make_unique<IsotropicStrainEnergyPressureEvaluator>(e, nu, vol_pressure, disp_gridfunc, disp_fespace, plane_approximation, use_gershgorin_check)) {}
 
         /// Uses the shared 2W `twice_energy` (filled by `IsotropicStrainEnergyPressureEvaluator::Evaluate`) instead of evaluating the energy itself.
         /// The rule of its QuadratureSpace is used for the integration. `twice_energy` must outlive the integrator.
@@ -186,7 +190,7 @@ namespace mfemplus
 
     public:
         /// `use_gershgorin_check` (default true) enables the Gershgorin-type tension check, see the class description.
-        IsotropicStrainEnergyVolumetricEigenStrainDamageIntegrator(mfem::Coefficient &e, mfem::Coefficient &nu, mfem::Coefficient &vol_strain_coeff, mfem::GridFunction &disp_gridfunc, mfem::FiniteElementSpace *disp_fespace, int plane_approximation = 0, bool use_gershgorin_check = true) : energy_source(std::make_unique<IsotropicStrainEnergyVolumetricEigenStrainEvaluator>(e, nu, vol_strain_coeff, disp_gridfunc, disp_fespace, plane_approximation, use_gershgorin_check)) {}
+        IsotropicStrainEnergyVolumetricEigenStrainDamageIntegrator(mfem::Coefficient &e, mfem::Coefficient &nu, mfem::Coefficient &vol_strain_coeff, mfem::GridFunction &disp_gridfunc, mfem::FiniteElementSpace *disp_fespace, int plane_approximation = 0, bool use_gershgorin_check = false) : energy_source(std::make_unique<IsotropicStrainEnergyVolumetricEigenStrainEvaluator>(e, nu, vol_strain_coeff, disp_gridfunc, disp_fespace, plane_approximation, use_gershgorin_check)) {}
 
         /// Uses the shared 2W `twice_energy` (filled by `IsotropicStrainEnergyVolumetricEigenStrainEvaluator::Evaluate`) instead of evaluating the energy itself.
         /// The rule of its QuadratureSpace is used for the integration. `twice_energy` must outlive the integrator.

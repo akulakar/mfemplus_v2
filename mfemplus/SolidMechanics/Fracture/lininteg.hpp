@@ -49,8 +49,8 @@ namespace mfemplus
     public:
         // Constructs a domain integrator with a given Coefficient
 
-        DamagedPressureBodyForceLFIntegrator(mfem::Coefficient &pressure_coeff, mfem::Coefficient &e, mfem::Coefficient &nu, mfem::real_t k_eps, mfem::GridFunction &damage_gridfunc, mfem::FiniteElementSpace *damage_fespace, int plane_approximation)
-            : pressure(&pressure_coeff), young_mod(&e), poisson_ratio(&nu), damage_gf(&damage_gridfunc), damage_fes(damage_fespace), k_epsilon(k_eps), planeApprox(plane_approximation) {}
+        DamagedPressureBodyForceLFIntegrator(mfem::Coefficient &e, mfem::Coefficient &nu, mfem::Coefficient &pressure_coeff, mfem::real_t k_eps, mfem::GridFunction &damage_gridfunc, mfem::FiniteElementSpace *damage_fespace, int plane_approximation)
+            : young_mod(&e), poisson_ratio(&nu), pressure(&pressure_coeff), damage_gf(&damage_gridfunc), damage_fes(damage_fespace), k_epsilon(k_eps), planeApprox(plane_approximation) {}
 
         /** Given a particular Finite Element and a transformation (Tr)
             computes the element right hand side element vector, elvect. **/
@@ -87,6 +87,39 @@ namespace mfemplus
 
         DamagedIsotropicVolumetricEigenstrainBodyForceLFIntegrator(mfem::Coefficient &e, mfem::Coefficient &nu, mfem::Coefficient &volumetric_strain_coeff_in, mfem::real_t k_eps, mfem::GridFunction &damage_gridfunc, mfem::FiniteElementSpace *damage_fespace, int plane_approximation = 0)
             : volumetric_strain_coeff(&volumetric_strain_coeff_in), young_mod(&e), poisson_ratio(&nu), damage_gf(&damage_gridfunc), damage_fes(damage_fespace), k_epsilon(k_eps), planeApprox(plane_approximation) {}
+
+        /** Given a particular Finite Element and a transformation (Tr)
+            computes the element right hand side element vector, elvect. **/
+        void AssembleRHSElementVect(const mfem::FiniteElement &el, mfem::ElementTransformation &Tr, mfem::Vector &elvect) override;
+
+        using mfem::LinearFormIntegrator::AssembleRHSElementVect;
+    };
+
+    /** DomainLFIntegrator for the damaged elasticity equation: regular body force f (VectorCoefficient) scaled by
+     * the degradation function (1 - d)^{2} + k_{\epsilon}.
+     * $$
+     *   l(v) = \int ((1 - d)^{2} + k_{\epsilon}) \, f \cdot v
+     * $$
+     * The damage d is read from `damage_gf` and interpolated at each integration point; f is evaluated at each
+     * integration point. The optional `damage_flag` coefficient (e.g. a PWConstCoefficient) is evaluated at the first
+     * integration point of an element: if it is 0 the element is not damaged (degradation = 1). nullptr (default)
+     * damages every element. This is a 'Vector' integrator (vector valued displacement space).
+     **/
+    class DamagedBodyForceLFIntegrator : public mfem::LinearFormIntegrator
+    {
+    protected:
+        mfem::VectorCoefficient *body_force;
+        mfem::Coefficient *damage_flag;
+        mfem::Vector shape, force;
+        mfem::GridFunction *damage_gf;
+        mfem::FiniteElementSpace *damage_fes;
+        mfem::Array<int> eldofs; // scalar for damage
+        mfem::Vector eldofdamage;
+        mfem::real_t k_epsilon;
+
+    public:
+        DamagedBodyForceLFIntegrator(mfem::VectorCoefficient &body_force_coeff, mfem::real_t k_eps, mfem::GridFunction &damage_gridfunc, mfem::FiniteElementSpace *damage_fespace, mfem::Coefficient *damage_flag_coeff = nullptr)
+            : body_force(&body_force_coeff), damage_flag(damage_flag_coeff), damage_gf(&damage_gridfunc), damage_fes(damage_fespace), k_epsilon(k_eps) {}
 
         /** Given a particular Finite Element and a transformation (Tr)
             computes the element right hand side element vector, elvect. **/
@@ -142,8 +175,8 @@ namespace mfemplus
         mfem::Vector energy, shape;
 
     public:
-        IsotropicStrainEnergyPressureDamageLFIntegrator(mfem::Coefficient &e, mfem::Coefficient &nu, mfem::Coefficient &vol_pressure, mfem::GridFunction &disp, mfem::FiniteElementSpace *disp_fespace, int plane_approximation = 0)
-            : energy_source(std::make_unique<IsotropicStrainEnergyPressureEvaluator>(e, nu, vol_pressure, disp, disp_fespace, plane_approximation)) {}
+        IsotropicStrainEnergyPressureDamageLFIntegrator(mfem::Coefficient &e, mfem::Coefficient &nu, mfem::Coefficient &vol_pressure, mfem::GridFunction &disp, mfem::FiniteElementSpace *disp_fespace, int plane_approximation = 0, bool use_gershgorin_check = false)
+            : energy_source(std::make_unique<IsotropicStrainEnergyPressureEvaluator>(e, nu, vol_pressure, disp, disp_fespace, plane_approximation, use_gershgorin_check)) {}
 
         /// Uses the shared 2W `twice_energy` (filled by `IsotropicStrainEnergyPressureEvaluator::Evaluate`) instead of evaluating the energy itself.
         /// The rule of its QuadratureSpace is used for the integration. `twice_energy` must outlive the integrator.
@@ -172,7 +205,7 @@ namespace mfemplus
 
     public:
         /// `use_gershgorin_check` (default true) enables the Gershgorin-type tension check, see the class description.
-        IsotropicStrainEnergyVolumetricEigenStrainDamageLFIntegrator(mfem::Coefficient &e, mfem::Coefficient &nu, mfem::Coefficient &vol_strain_coeff, mfem::GridFunction &disp_gridfunc, mfem::FiniteElementSpace *disp_fespace, int plane_approximation = 0, bool use_gershgorin_check = true)
+        IsotropicStrainEnergyVolumetricEigenStrainDamageLFIntegrator(mfem::Coefficient &e, mfem::Coefficient &nu, mfem::Coefficient &vol_strain_coeff, mfem::GridFunction &disp_gridfunc, mfem::FiniteElementSpace *disp_fespace, int plane_approximation = 0, bool use_gershgorin_check = false)
             : energy_source(std::make_unique<IsotropicStrainEnergyVolumetricEigenStrainEvaluator>(e, nu, vol_strain_coeff, disp_gridfunc, disp_fespace, plane_approximation, use_gershgorin_check)) {}
 
         /// Uses the shared 2W `twice_energy` (filled by `IsotropicStrainEnergyVolumetricEigenStrainEvaluator::Evaluate`) instead of evaluating the energy itself.

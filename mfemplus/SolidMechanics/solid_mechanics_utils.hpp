@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <cmath>
 
-
 namespace mfemplus
 {
     namespace detail
@@ -28,7 +27,7 @@ namespace mfemplus
 
         /// Returns `ir` if set, otherwise a rule of order 2 p + (order of the transformation gradient).
         inline const mfem::IntegrationRule &IntRuleOrDefault(const mfem::IntegrationRule *ir, const mfem::FiniteElement &el,
-                                                       mfem::ElementTransformation &Tr)
+                                                             mfem::ElementTransformation &Tr)
         {
             if (ir != nullptr)
             {
@@ -173,7 +172,7 @@ namespace mfemplus
         /// Twice the elastic energy density, u^T B^T C B u, for the isotropic stiffness, without B or C.
         /// Strain is returned in `strain` and stress in `stress`.
         inline mfem::real_t TwiceIsotropicStrainEnergy(const mfem::DenseMatrix &gshape, int dim, const mfem::Vector &u, mfem::real_t lambda,
-                                                 mfem::real_t mu, mfem::Vector &strain, mfem::Vector &stress)
+                                                       mfem::real_t mu, mfem::Vector &strain, mfem::Vector &stress)
         {
             VoigtStrain(gshape, dim, u, strain);
             IsotropicStress(strain, dim, lambda, mu, stress);
@@ -223,7 +222,7 @@ namespace mfemplus
         /// Twice the elastic energy density, u^T B^T C B u, with strain = B u and stress = C strain.
         /// Strain is returned in Bu and stress in CBu.
         inline mfem::real_t TwiceStrainEnergy(const mfem::DenseMatrix &C, const mfem::DenseMatrix &B,
-                                        const mfem::Vector &eldofdisp, mfem::Vector &Bu, mfem::Vector &CBu)
+                                              const mfem::Vector &eldofdisp, mfem::Vector &Bu, mfem::Vector &CBu)
         {
             B.Mult(eldofdisp, Bu);
             C.Mult(Bu, CBu);
