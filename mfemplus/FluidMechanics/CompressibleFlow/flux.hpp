@@ -1,12 +1,11 @@
 //------------------------------------------------------------------------------------------------------------
 //------------------------------------------------------------------------------------------------------------
-// Classes related to hyperbolic PDEs.
-// Currently containts numerical flux functions.
+// Numerical flux functions for hyperbolic PDEs.
 //------------------------------------------------------------------------------------------------------------
 //------------------------------------------------------------------------------------------------------------
 
-#ifndef MFEMPLUS_COMPRESSIBLEFLOW_HYPERBOLIC
-#define MFEMPLUS_COMPRESSIBLEFLOW_HYPERBOLIC
+#ifndef MFEMPLUS_COMPRESSIBLEFLOW_FLUX
+#define MFEMPLUS_COMPRESSIBLEFLOW_FLUX
 
 #include "mfem.hpp"
 
@@ -88,4 +87,4 @@ namespace mfemplus
 
 } // namespace mfemplus
 
-#endif // MFEMPLUS_COMPRESSIBLEFLOW_HYPERBOLIC
+#endif // MFEMPLUS_COMPRESSIBLEFLOW_FLUX

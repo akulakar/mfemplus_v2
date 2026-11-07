@@ -4,7 +4,7 @@ Guidance for `mfemplus/FluidMechanics/CompressibleFlow` (compressible Euler nume
 framework). Build notes are in the root `CLAUDE.md`.
 
 ## Layout
-- `hyperbolic.{hpp,cpp}`: numerical fluxes (namespace `mfemplus`), derived from `mfem::NumericalFlux`. Currently only
+- `flux.{hpp,cpp}`: numerical fluxes (namespace `mfemplus`), derived from `mfem::NumericalFlux`. Currently only
   `HLLCFlux`.
 - `reference_files/`: read-only third-party references, do not edit and do not build.
   - `hyperbolic.{hpp,cpp}`: MFEM's own hyperbolic module (`FluxFunction`, `NumericalFlux`, `RusanovFlux`, `EulerFlux`,

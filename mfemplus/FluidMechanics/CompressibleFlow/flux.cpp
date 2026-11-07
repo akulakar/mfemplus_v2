@@ -1,11 +1,10 @@
 //------------------------------------------------------------------------------------------------------------
 //------------------------------------------------------------------------------------------------------------
-// Classes related to hyperbolic PDEs.
-// Currently containts numerical flux functions.
+// Numerical flux functions for hyperbolic PDEs.
 //------------------------------------------------------------------------------------------------------------
 //------------------------------------------------------------------------------------------------------------
 
-#include "mfemplus/FluidMechanics/CompressibleFlow/hyperbolic.hpp"
+#include "mfemplus/FluidMechanics/CompressibleFlow/flux.hpp"
 
 #include <algorithm>
 #include <cmath>
