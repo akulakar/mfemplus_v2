@@ -7,5 +7,6 @@
 
 // Compressible flow headers
 #include "mfemplus/FluidMechanics/CompressibleFlow/flux.hpp"
+#include "mfemplus/FluidMechanics/CompressibleFlow/limiter.hpp"
 
 #endif

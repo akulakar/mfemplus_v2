@@ -20,9 +20,9 @@ CMake build was only checked with a stub `mfem` target; direct `mpicxx` builds w
 - `mfemplus/SolidMechanics`: solid-mechanics modules (Fracture, General, and empty Hyperelasticity /
   LinearElasticity / Viscoelasticity placeholders); see `mfemplus/SolidMechanics/CLAUDE.md` for shared conventions
   (Voigt, isotropic kernels) and `mfemplus/SolidMechanics/Fracture/CLAUDE.md` for the phase-field fracture module.
-- `mfemplus/FluidMechanics/CompressibleFlow`: `HLLCFlux` numerical flux for the Euler equations (`flux.*`),
-  plus `reference_files/` (MFEM and CAMR sources, read-only); see `mfemplus/FluidMechanics/CompressibleFlow/CLAUDE.md`.
-  It is not yet in CMake (`add_subdirectory(FluidMechanics)` is commented out) and has not been compiled.
+- `mfemplus/FluidMechanics/CompressibleFlow`: `HLLCFlux` and `HLLFlux` numerical fluxes (`flux.*`) and
+  `PositivityLimiter` / `BarthJespersenLimiter` (`limiter.*`) for the Euler equations, target `mfemplus::compressible_flow`, plus `reference_files/` (MFEM and CAMR
+  sources, read-only); see `mfemplus/FluidMechanics/CompressibleFlow/CLAUDE.md`. None of these classes has been run yet.
 - `config`, `documentation` (repo root): empty placeholders.
 
 ## Shell commands

@@ -59,15 +59,7 @@ namespace mfemplus
        * computation
        */
       HLLCFlux(const mfem::FluxFunction &fluxFunction, mfem::real_t specific_heat_ratio,
-               mfem::real_t small_dens = 1e-12, mfem::real_t small_pres = 1e-12)
-          : NumericalFlux(fluxFunction), gamma(specific_heat_ratio), dim(fluxFunction.dim),
-            small_dens(small_dens), small_pres(small_pres)
-      {
-         MFEM_VERIFY(fluxFunction.num_equations == dim + 2, "HLLCFlux requires the Euler equations, num_equations = dim + 2.");
-
-         fluxN1.SetSize(fluxFunction.num_equations);
-         fluxN2.SetSize(fluxFunction.num_equations);
-      }
+               mfem::real_t small_dens = 1e-12, mfem::real_t small_pres = 1e-12);
 
       /**
        * @brief Normal numerical flux F̂(u⁻,u⁺,x) n
@@ -77,6 +69,64 @@ namespace mfemplus
        * @param[in] nor normal vector (not a unit vector) (dim)
        * @param[in] Tr face element transformation
        * @param[out] flux HLLC flux, scaled by |nor| like F(u)n
+       * @return max(|S_L|, |S_R|), the maximum wave speed estimate
+       */
+      mfem::real_t Eval(const mfem::Vector &state1, const mfem::Vector &state2,
+                        const mfem::Vector &nor,
+                        mfem::FaceElementTransformations &Tr,
+                        mfem::Vector &flux) const override;
+   };
+
+
+   /**
+    * @brief HLL (Harten-Lax-van Leer) approximate Riemann solver for the compressible
+    * Euler equations, state u = (ρ, ρu, E).
+    *
+    * The Riemann fan is approximated by two waves with speeds S_L < S_R and a single
+    * constant state in between, so contact and shear waves are smeared (see HLLCFlux
+    * to resolve them). With the unit normal n̂:
+    *   - S_L, S_R: Einfeldt (Roe-averaged) estimates, as in HLLCFlux
+    *   - F̂ n = F(u⁻)n                                                  if S_L ≥ 0
+    *           (S_R F(u⁻)n - S_L F(u⁺)n + S_L S_R (u⁺ - u⁻))/(S_R - S_L)  if S_L < 0 < S_R
+    *           F(u⁺)n                                                  if S_R ≤ 0
+    *
+    * @note Requires a FluxFunction for the Euler equations with num_equations = dim + 2
+    * (e.g. mfem::EulerFlux) and the same specific heat ratio γ that it uses.
+    * @note Only Eval() is implemented. Grad(), Average() and AverageGrad() abort if
+    * called, so use with explicit time integration.
+    * @note ρ and p are floored at small_dens and small_pres in the wave speed
+    * computation only. The fluxes F(u)n use the unmodified states.
+    * @note The instance keeps mutable work vectors and is not thread-safe.
+    */
+   class HLLFlux : public mfem::NumericalFlux
+   {
+   protected:
+      const mfem::real_t gamma;      // specific heat ratio, γ
+      const int dim;                 // spatial dimension
+      const mfem::real_t small_dens; // density floor
+      const mfem::real_t small_pres; // pressure floor
+
+      mutable mfem::Vector fluxN1, fluxN2;
+
+   public:
+      /**
+       * @brief Constructor
+       * @param fluxFunction Euler flux function F(u,x)
+       * @param specific_heat_ratio specific heat ratio γ (must match fluxFunction)
+       * @param small_dens floor for the density in the wave speed computation
+       * @param small_pres floor for the pressure in the wave speed computation
+       */
+      HLLFlux(const mfem::FluxFunction &fluxFunction, mfem::real_t specific_heat_ratio,
+              mfem::real_t small_dens = 1e-12, mfem::real_t small_pres = 1e-12);
+
+      /**
+       * @brief Normal numerical flux F̂(u⁻,u⁺,x) n
+       *
+       * @param[in] state1 state (u⁻) from the first element (dim + 2)
+       * @param[in] state2 state (u⁺) from the second element (dim + 2)
+       * @param[in] nor normal vector (not a unit vector) (dim)
+       * @param[in] Tr face element transformation
+       * @param[out] flux HLL flux, scaled by |nor| like F(u)n
        * @return max(|S_L|, |S_R|), the maximum wave speed estimate
        */
       mfem::real_t Eval(const mfem::Vector &state1, const mfem::Vector &state2,

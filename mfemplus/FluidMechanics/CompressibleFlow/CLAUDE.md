@@ -4,8 +4,11 @@ Guidance for `mfemplus/FluidMechanics/CompressibleFlow` (compressible Euler nume
 framework). Build notes are in the root `CLAUDE.md`.
 
 ## Layout
-- `flux.{hpp,cpp}`: numerical fluxes (namespace `mfemplus`), derived from `mfem::NumericalFlux`. Currently only
-  `HLLCFlux`.
+- `flux.{hpp,cpp}`: numerical fluxes (namespace `mfemplus`), derived from `mfem::NumericalFlux`. `HLLCFlux` and `HLLFlux` (HLL,
+  same Einfeldt wave speeds and conventions, shared helper `ComputeEulerWaves`).
+- `limiter.{hpp,cpp}`: limiters for the DG solution. `PositivityLimiter` (Zhang–Shu) and
+  `BarthJespersenLimiter` (slope limiter on face-neighbor means).
+- `CMakeLists.txt`: library target `mfemplus::compressible_flow` (`flux.cpp`, `limiter.cpp`).
 - `reference_files/`: read-only third-party references, do not edit and do not build.
   - `hyperbolic.{hpp,cpp}`: MFEM's own hyperbolic module (`FluxFunction`, `NumericalFlux`, `RusanovFlux`, `EulerFlux`,
     `HyperbolicFormIntegrator`).
@@ -29,4 +32,23 @@ framework). Build notes are in the root `CLAUDE.md`.
   general EOS.
 - Code in this folder uses 3-space indentation inside `namespace mfemplus` and `using namespace` in the `.cpp`
   (the header still qualifies with `mfem::`).
-- Status: `HLLCFlux` has never been compiled or tested. The module is not in CMake yet.
+- `PositivityLimiter(fes, gamma, small_dens, small_pres, int_order_offset = 1)` with `int Apply(ParGridFunction &u)`.
+  Per element it keeps the mean and scales the solution about it by the smallest θ ∈ [0,1] that gives ρ ≥ floor and
+  p ≥ floor at the volume quadrature points and the face quadrature points (order 2p + `int_order_offset`).
+  The density step is followed by an exact quadratic solve for the pressure.
+  - Element-local, no MPI communication, no cached or `mutable` state.
+  - Needs a nodal partition-of-unity basis (checked with `MFEM_VERIFY`).
+  - If an element mean is already below a floor, θ is set to 0 (the element becomes its mean) and the element is
+    counted in the return value, which is local to the rank. The mean is never floored, to keep conservation.
+  - Positivity is guaranteed only at the checked points.
+  - Supported geometries: segment, triangle, square, tetrahedron, cube. The face points are mapped from the
+    reference face vertices, so no face transformations are needed.
+- `BarthJespersenLimiter(pfes, int_order_offset = 1)` with `int Apply(ParGridFunction &u)` (non-const). Any vdim,
+  acts on the conserved variables with a single θ per element (min over components and over the volume and face
+  quadrature points) from the min/max of the own and face-neighbor element means; scales about the mean. The
+  local and shared (MPI) face-neighbor lists are built once in the constructor (static, conforming mesh), and
+  `Apply` communicates the neighbor means through `ExchangeFaceNbrData`. Returns the number of limited elements.
+  Does not enforce positivity, so apply `PositivityLimiter` afterwards.
+- Status: `HLLCFlux`, `HLLFlux`, `PositivityLimiter` and `BarthJespersenLimiter` have never been run. `flux.cpp` and
+  `limiter.cpp` pass `mpicxx -fsyntax-only -Wall -Wextra` (they need `-I/opt/homebrew/opt/adios2/include` besides the
+  MFEM, hypre and metis includes).
